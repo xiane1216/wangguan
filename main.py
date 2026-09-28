@@ -64,6 +64,58 @@ def _inject_system(messages: list, block: str) -> list:
     return msgs
 
 
+# ---- 请求透视（诊断用：只记数字和构成，不存任何聊天内容） ----
+_xray: list = []  # 最近若干条经过网关的请求统计
+
+
+def _content_stats(content) -> tuple:
+    """返回 (文本字符数, 非文本分片数)。图片/音频等非文本分片也占token。"""
+    if isinstance(content, str):
+        return len(content), 0
+    if isinstance(content, list):
+        chars, nontext = 0, 0
+        for p in content:
+            if isinstance(p, dict):
+                if p.get("type") == "text":
+                    chars += len(p.get("text") or "")
+                else:
+                    nontext += 1
+            elif isinstance(p, str):
+                chars += len(p)
+        return chars, nontext
+    return 0, 0
+
+
+def _xray_base(payload: dict, messages: list) -> dict:
+    msgs, reasoning_msgs, reasoning_chars = [], 0, 0
+    total_chars, total_nontext = 0, 0
+    for m in messages or []:
+        chars, nontext = _content_stats(m.get("content"))
+        rc = str(m.get("reasoning_content") or "")
+        total_chars += chars
+        total_nontext += nontext
+        if rc:
+            reasoning_msgs += 1
+            reasoning_chars += len(rc)
+        msgs.append({"role": str(m.get("role") or "?"), "chars": chars,
+                     "nontext_parts": nontext, "reasoning_chars": len(rc)})
+    tools = payload.get("tools") or []
+    return {
+        "ts": memory._now().isoformat(timespec="seconds"),
+        "model": payload.get("model"),
+        "stream": bool(payload.get("stream")),
+        "n_messages": len(messages or []),
+        "total_message_chars": total_chars,
+        "total_nontext_parts": total_nontext,
+        "messages": msgs,
+        "reasoning_messages": reasoning_msgs,
+        "reasoning_chars": reasoning_chars,
+        "tools_count": len(tools),
+        "tools_chars": len(json.dumps(tools, ensure_ascii=False)) if tools else 0,
+        "injected_block_chars": None,
+    }
+
+
 # ---- 普通接口 ----
 
 async def index(_: Request):
@@ -118,6 +170,7 @@ async def chat_completions(request: Request):
 
     messages = list(payload.get("messages") or [])
     info = memory.analyze_messages(messages)
+    xrec = _xray_base(payload, messages)
     if info["first_user"]:
         try:
             block, wkey = await memory.get_window_block(info["system"], info["first_user"])
@@ -130,8 +183,11 @@ async def chat_completions(request: Request):
             block = None
         if block:
             payload["messages"] = _inject_system(messages, block)
+            xrec["injected_block_chars"] = len(block)
             log.info("窗口 %s 注入记忆 %d 字（历史 assistant 消息 %d 条）",
                      wkey, len(block), info["assistant_count"])
+    _xray.append(xrec)
+    del _xray[:-10]
 
     want_stream = bool(payload.get("stream", False))
     target = f"{config.DEEPSEEK_BASE_URL}/chat/completions"
@@ -282,6 +338,16 @@ async def admin_preview(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+async def debug_xray(request: Request):
+    """请求透视：最近若干条经过网关的请求构成（只含数字，不含聊天内容）。
+
+    鉴权：网关 Key（Authorization: Bearer）或管理钥匙（?key=）均可。
+    """
+    if not (_check_gateway(request) or _check_admin(request)):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse({"recent": _xray}, headers={"Cache-Control": "no-store"})
+
+
 # ---- 后台任务 ----
 
 async def background_worker():
@@ -320,6 +386,7 @@ app = Starlette(routes=[
     Route("/admin/restyle", admin_restyle, methods=["GET", "POST"]),
     Route("/admin/import_ob", admin_import_ob, methods=["GET", "POST"]),
     Route("/admin/preview", admin_preview, methods=["GET"]),
+    Route("/debug/xray", debug_xray, methods=["GET"]),
 ], lifespan=lifespan)
 
 
