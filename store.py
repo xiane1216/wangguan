@@ -124,6 +124,23 @@ async def get_recent_dailies(min_date_str: str, limit: int = 30) -> list:
     return await _sb_get(config.MEMORY_TABLE, q)
 
 
+async def get_all_roughs(limit: int = 200) -> list:
+    """取全部粗略归档（kind=rough），按日期升序。"""
+    q = f"select=scope,content&kind=eq.rough&order=scope.asc&limit={max(1, min(limit, 400))}"
+    return await _sb_get(config.MEMORY_TABLE, q)
+
+
+async def delete_roughs():
+    """长期记忆合并成功后，清掉已消化的粗略归档。"""
+    if not config.supabase_ready():
+        return
+    url = f"{config.SUPABASE_URL}/rest/v1/{config.MEMORY_TABLE}?kind=eq.rough"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.delete(url, headers=_headers())
+    if r.status_code >= 400:
+        raise RuntimeError(f"清理 rough 失败: HTTP {r.status_code} {r.text[:200]}")
+
+
 async def get_state(scope: str) -> str | None:
     rows = await _sb_get(config.MEMORY_TABLE, f"select=content&kind=eq.state&scope=eq.{scope}&limit=1")
     if not rows:

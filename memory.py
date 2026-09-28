@@ -9,6 +9,7 @@
   - OB 搬运和原始记录是"原样复制"，不经过任何 LLM；
   - 每日概括和长期记忆合并用 deepseek-flash + 防幻觉铁律 prompt。
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -227,15 +228,32 @@ def _meta_messages(row: dict) -> int:
         return -1
 
 
+_refresh_lock = asyncio.Lock()      # 同一时间只允许一个刷新任务（防撞车双倍烧 API）
+_MAX_CONSEC_FAIL = 5                # 连续失败 N 次本轮收工，等下一轮
+_MAX_ARCHIVE_PER_CYCLE = 40         # 每轮最多归档多少个老日子
+
+
 async def refresh_once(force_days: int = 0) -> dict:
-    """定时任务：更新每日概括 + 把超出"近期窗口"的每日概括并进长期记忆。"""
-    stats = {"days_summarized": [], "merged_days": [], "longterm_updated": False, "day_errors": {}}
+    """定时刷新（按用户要求的两级记忆结构）：
+
+    1. 详细每日概括 —— 只做最近 RECENT_DAYS 天（给"近期记忆"用）
+    2. 粗略归档 —— 老于 RECENT_DAYS 的日子，一天压成一两句话
+    3. 长期记忆 —— 粗略归档合并成的"这个月大概"（800 字内），合并完清掉粗归档
+    """
+    if _refresh_lock.locked():
+        return {"skipped": "上一轮刷新还在跑，本轮跳过"}
+    async with _refresh_lock:
+        return await _refresh_once_inner(force_days)
+
+
+async def _refresh_once_inner(force_days: int = 0) -> dict:
+    stats = {"days_summarized": [], "days_archived": [], "longterm_updated": False, "day_errors": {}}
     if not config.supabase_ready():
         stats["error"] = "Supabase 未配置，跳过"
-        return stats
+        return await _finish_refresh(stats)
     if not config.deepseek_ready():
         stats["error"] = "DEEPSEEK_API_KEY 未配置，跳过"
-        return stats
+        return await _finish_refresh(stats)
 
     today = _now().date()
     earliest = today - timedelta(days=config.MAX_BACKFILL_DAYS)
@@ -246,11 +264,13 @@ async def refresh_once(force_days: int = 0) -> dict:
         if d and earliest <= d <= today:
             by_day.setdefault(d, []).append(r)
 
-    merged_until_raw = await store.get_state("merged_until")
-    merged_until = _parse_date(merged_until_raw) if merged_until_raw else None
+    fails = 0  # 连续失败计数
 
-    # 1) 每日概括
+    # 1) 详细每日概括：只做最近 RECENT_DAYS 天（含今天）
+    recent_from = today - timedelta(days=config.RECENT_DAYS - 1)
     for day in sorted(by_day.keys()):
+        if day < recent_from:
+            continue  # 老日子走粗略归档，不做详细概括
         day_rows = by_day[day]
         age = (today - day).days
         existing = await store.get_daily(str(day))
@@ -262,51 +282,86 @@ async def refresh_once(force_days: int = 0) -> dict:
                 continue
         else:
             if existing:
-                continue  # 冻结日已有概括
-            if merged_until and day <= merged_until:
-                continue  # 已经并进长期记忆了
+                continue  # 前天的概括已冻结
         try:
             summary = await summarizer.summarize_day(str(day), day_rows)
         except Exception as exc:
             log.exception("总结 %s 失败", day)
             stats["day_errors"][str(day)] = f"{type(exc).__name__}: {str(exc)[:180]}"
+            fails += 1
+            if fails >= _MAX_CONSEC_FAIL:
+                stats["aborted"] = "连续失败过多，本轮提前结束"
+                break
             continue
+        fails = 0
         if not summary.strip():
             continue
         await store.set_memory("daily", str(day), summary, {"messages": len(day_rows)})
         stats["days_summarized"].append(str(day))
-        log.info("已生成 %s 的每日概括（%d 条消息）", day, len(day_rows))
+        log.info("已生成 %s 的详细概括（%d 条消息）", day, len(day_rows))
 
-    # 2) 长期记忆合并：把超出"近期窗口"的每日概括并进长期记忆（每轮最多 12 天）
-    merge_days = [d for d in sorted(by_day.keys())
-                  if (today - d).days >= config.RECENT_DAYS
-                  and (merged_until is None or d > merged_until)]
-    merge_days = merge_days[:12]
-    if merge_days:
-        dailies = []
-        for d in merge_days:
-            row = await store.get_daily(str(d))
-            c = ((row or {}).get("content") or "").strip()
-            if c:
-                dailies.append(f"〔{d}〕\n{c}")
-        if dailies:
-            existing = (await store.get_longterm() or "").strip()
+    # 2) 粗略归档：老于 RECENT_DAYS 且没归档过的日子，一天压成一两句话
+    if not stats.get("aborted"):
+        absorbed_until = _parse_date(await store.get_state("absorbed_until") or "")
+        archive_days = [d for d in sorted(by_day.keys())
+                        if (today - d).days >= config.RECENT_DAYS
+                        and (absorbed_until is None or d > absorbed_until)]
+        for day in archive_days[:_MAX_ARCHIVE_PER_CYCLE]:
+            day_rows = by_day[day]
+            existing = await store.get_daily(str(day))
             try:
-                merged = await summarizer.merge_longterm(existing, dailies)
+                if existing and (existing.get("content") or "").strip():
+                    note = await summarizer.rough_from_summary(str(day), existing["content"])
+                else:
+                    note = await summarizer.rough_from_raw(str(day), day_rows)
+            except Exception as exc:
+                log.exception("归档 %s 失败", day)
+                stats["day_errors"]["archive:" + str(day)] = f"{type(exc).__name__}: {str(exc)[:180]}"
+                fails += 1
+                if fails >= _MAX_CONSEC_FAIL:
+                    stats["aborted"] = "连续失败过多，本轮提前结束"
+                    break
+                continue
+            fails = 0
+            if not note.strip():
+                note = "（当天无值得归档的内容）"
+            await store.set_memory("rough", str(day), note, {})
+            await store.set_memory("state", "absorbed_until", str(day), {})
+            stats["days_archived"].append(str(day))
+
+    # 3) 长期记忆：把全部粗略归档合并成"这个月的大概"，合并成功后清掉粗归档
+    if not stats.get("aborted"):
+        try:
+            rough_rows = await store.get_all_roughs()
+        except Exception:
+            log.exception("读取粗略归档失败")
+            rough_rows = []
+        roughs = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}"
+                  for r in rough_rows if (r.get("content") or "").strip()]
+        if roughs:
+            existing_lt = (await store.get_longterm() or "").strip()
+            try:
+                merged = await summarizer.merge_longterm(existing_lt, roughs)
             except Exception as exc:
                 log.exception("长期记忆合并失败")
                 stats["merge_error"] = f"{type(exc).__name__}: {str(exc)[:180]}"
                 merged = ""
             if merged.strip():
-                await store.set_memory("longterm", "", merged,
-                                       {"source": "gateway_merge", "merged_until": str(merge_days[-1])})
-                await store.set_memory("state", "merged_until", str(merge_days[-1]), {})
-                stats["merged_days"] = [str(d) for d in merge_days]
+                await store.set_memory("longterm", "", merged, {"source": "gateway_merge"})
                 stats["longterm_updated"] = True
-                log.info("长期记忆已合并 %d 天的概括", len(merge_days))
+                try:
+                    await store.delete_roughs()  # 已消化，清掉
+                except Exception:
+                    log.exception("清理已消化的粗略归档失败")
+                log.info("长期记忆已合并（%d 条粗略归档）", len(roughs))
 
-    await store.set_memory("state", "last_refresh", _now().isoformat(), {})
+    return await _finish_refresh(stats)
+
+
+async def _finish_refresh(stats: dict) -> dict:
+    """收尾：记录刷新时间和错误摘要，方便管理接口排查。"""
     try:
+        await store.set_memory("state", "last_refresh", _now().isoformat(), {})
         err = {k: v for k, v in stats.items() if k in ("day_errors", "merge_error")}
         await store.set_memory("state", "last_errors", json.dumps(err, ensure_ascii=False), {})
     except Exception:

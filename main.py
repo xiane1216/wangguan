@@ -177,7 +177,7 @@ async def admin_memory(request: Request):
     min_day = (memory._now() - timedelta(days=config.RECENT_DAYS - 1)).strftime("%Y-%m-%d")
     dailies = await store.get_recent_dailies(min_day)
     latest = await store.get_recent_dailies("0000-00-00", limit=10)
-    merged_until = await store.get_state("merged_until")
+    absorbed_until = await store.get_state("absorbed_until")
     last_refresh = await store.get_state("last_refresh")
     last_errors = await store.get_state("last_errors")
     return JSONResponse({
@@ -186,7 +186,7 @@ async def admin_memory(request: Request):
         "longterm_chars": len((longterm or "").strip()),
         "recent_daily": [{"date": d.get("scope"), "content": d.get("content")} for d in dailies],
         "latest_daily": [{"date": d.get("scope"), "chars": len(d.get("content") or "")} for d in latest],
-        "merged_until": merged_until,
+        "absorbed_until": absorbed_until,
         "last_refresh": last_refresh,
     }, headers={"Cache-Control": "no-store"})
 

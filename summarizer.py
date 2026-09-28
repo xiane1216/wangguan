@@ -2,6 +2,11 @@
 
 模型：deepseek-flash（DeepSeek-V4.1-Flash 的官方 API 名）。
 所有总结都带防幻觉铁律：只概括真实聊过、原文明确出现的内容，禁止编造。
+
+两级总结：
+- 详细每日（最近3天用）：summarize_day
+- 粗略归档（老日子用，一天一两句话）：rough_from_raw / rough_from_summary
+- 长期记忆合并（大概级别）：merge_longterm
 """
 import asyncio
 import logging
@@ -68,7 +73,7 @@ async def _chat(messages: list, max_tokens: int, temperature: float) -> str:
     if not content:
         # 思考型模型可能把 max_tokens 全部烧在推理上导致正文为空。
         # 铁律：reasoning_content 是思考过程，不是答案，绝不能存成记忆。
-        raise RuntimeError("模型没有产出正文（推理可能耗尽了 max_tokens，请在 Zeabur 调大 SUMMARY_MAX_TOKENS）")
+        raise RuntimeError("模型没有产出正文（推理可能耗尽了 max_tokens，请调大 SUMMARY_MAX_TOKENS）")
     return _clean(content)
 
 
@@ -93,6 +98,7 @@ def transcript(rows: list, max_messages: int = 400, clip: int = 2000) -> str:
 
 
 async def summarize_day(date_str: str, rows: list) -> str:
+    """详细每日概括（最近3天用）。"""
     text = transcript(rows)
     if not text.strip():
         return ""
@@ -109,14 +115,42 @@ async def summarize_day(date_str: str, rows: list) -> str:
     )
 
 
-async def merge_longterm(existing: str, daily_texts: list) -> str:
-    prompt = prompts.LONGTERM_MERGE.format(
-        longterm=(existing or "").strip() or "（暂无）",
-        dailies="\n\n".join(daily_texts),
+async def rough_from_raw(date_str: str, rows: list) -> str:
+    """从一天的原始聊天记录直接生成粗略归档（1~3 句话）。"""
+    text = transcript(rows)
+    if not text.strip():
+        return ""
+    prompt = prompts.ROUGH_ARCHIVE.format(
+        user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
+        date=date_str,
+        transcript=text,
     )
-    # 合并任务输入大，多给 2000 token 余量
     return await _chat(
         [{"role": "user", "content": prompt}],
-        config.SUMMARY_MAX_TOKENS + 2000,
+        config.SUMMARY_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
+async def rough_from_summary(date_str: str, daily_text: str) -> str:
+    """把已有的详细每日概括压缩成粗略归档（更省输入）。"""
+    prompt = prompts.ROUGH_FROM_SUMMARY.format(date=date_str, daily=daily_text)
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        1200,
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
+async def merge_longterm(existing: str, rough_texts: list) -> str:
+    """把粗略归档合并进长期记忆（大概级别，全文 800 字内）。"""
+    prompt = prompts.LONGTERM_MERGE.format(
+        longterm=(existing or "").strip() or "（暂无）",
+        roughs="\n".join(rough_texts),
+    )
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        config.SUMMARY_MAX_TOKENS + 1000,
         config.SUMMARY_TEMPERATURE,
     )
