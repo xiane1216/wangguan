@@ -148,9 +148,10 @@ async def merge_longterm(existing: str, rough_texts: list) -> str:
     prompt = prompts.LONGTERM_MERGE.format(
         longterm=(existing or "").strip() or "（暂无）",
         roughs="\n".join(rough_texts),
+        max_chars=config.LONGTERM_MAX_CHARS,
     )
     return await _chat(
         [{"role": "user", "content": prompt}],
-        config.SUMMARY_MAX_TOKENS + 1000,
+        config.SUMMARY_MAX_TOKENS + 1500,  # 输出2000字(约1400token)的余量
         config.SUMMARY_TEMPERATURE,
     )
