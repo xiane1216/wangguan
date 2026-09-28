@@ -204,13 +204,14 @@ async def build_preview(first_user_hint: str = "") -> dict:
 
 
 def _row_date(value):
+    # App 写入的 created_at 是"手机本地墙上时钟"字符串（yyyy-MM-dd HH:mm:ss，无时区），
+    # 但数据库列是 TIMESTAMPTZ，Postgres 把它错标成了 UTC。
+    # 所以绝不能按 UTC 转回北京时间（那样日期会被推后 8 小时：27号晚上变成28号凌晨）——
+    # 字面写的日期就是真实的北京时间，直接取字面日期即可。
     s = str(value or "").strip()
     if not s:
         return None
     try:
-        if s.endswith("Z") or ("+" in s[10:]):
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            return dt.astimezone(TZ).date()
         return datetime.strptime(s[:10], "%Y-%m-%d").date()
     except Exception:
         return None
@@ -228,6 +229,14 @@ def _meta_messages(row: dict) -> int:
         return int(json.loads(row.get("meta") or "{}").get("messages", -1))
     except Exception:
         return -1
+
+
+def _meta_tz_fixed(row: dict) -> bool:
+    """带 tz_fix 标记 = 时区修复之后生成的概括；旧概括缺标记，需强制重生成一次。"""
+    try:
+        return bool(json.loads(row.get("meta") or "{}").get("tz_fix"))
+    except Exception:
+        return False
 
 
 _refresh_lock = asyncio.Lock()      # 同一时间只允许一个刷新任务（防撞车双倍烧 API）
@@ -283,8 +292,9 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             if existing and _meta_messages(existing) == len(day_rows):
                 continue
         else:
-            if existing:
-                continue  # 前天的概括已冻结
+            if existing and _meta_tz_fixed(existing):
+                continue  # 已冻结
+            # 没带 tz_fix 标记的旧概括是时区错位时期生成的：强制重生成一次
         try:
             summary = await summarizer.summarize_day(str(day), day_rows)
         except Exception as exc:
@@ -299,7 +309,7 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
         if not summary.strip():
             stats["day_errors"][str(day)] = "模型返回空内容（推理烧光了max_tokens）"
             continue
-        await store.set_memory("daily", str(day), summary, {"messages": len(day_rows)})
+        await store.set_memory("daily", str(day), summary, {"messages": len(day_rows), "tz_fix": 1})
         stats["days_summarized"].append(str(day))
         log.info("已生成 %s 的详细概括（%d 条消息）", day, len(day_rows))
 
