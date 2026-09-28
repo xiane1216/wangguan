@@ -229,7 +229,7 @@ def _meta_messages(row: dict) -> int:
 
 async def refresh_once(force_days: int = 0) -> dict:
     """定时任务：更新每日概括 + 把超出"近期窗口"的每日概括并进长期记忆。"""
-    stats = {"days_summarized": [], "merged_days": [], "longterm_updated": False}
+    stats = {"days_summarized": [], "merged_days": [], "longterm_updated": False, "day_errors": {}}
     if not config.supabase_ready():
         stats["error"] = "Supabase 未配置，跳过"
         return stats
@@ -267,8 +267,9 @@ async def refresh_once(force_days: int = 0) -> dict:
                 continue  # 已经并进长期记忆了
         try:
             summary = await summarizer.summarize_day(str(day), day_rows)
-        except Exception:
+        except Exception as exc:
             log.exception("总结 %s 失败", day)
+            stats["day_errors"][str(day)] = f"{type(exc).__name__}: {str(exc)[:180]}"
             continue
         if not summary.strip():
             continue
@@ -292,8 +293,9 @@ async def refresh_once(force_days: int = 0) -> dict:
             existing = (await store.get_longterm() or "").strip()
             try:
                 merged = await summarizer.merge_longterm(existing, dailies)
-            except Exception:
+            except Exception as exc:
                 log.exception("长期记忆合并失败")
+                stats["merge_error"] = f"{type(exc).__name__}: {str(exc)[:180]}"
                 merged = ""
             if merged.strip():
                 await store.set_memory("longterm", "", merged,
@@ -304,6 +306,11 @@ async def refresh_once(force_days: int = 0) -> dict:
                 log.info("长期记忆已合并 %d 天的概括", len(merge_days))
 
     await store.set_memory("state", "last_refresh", _now().isoformat(), {})
+    try:
+        err = {k: v for k, v in stats.items() if k in ("day_errors", "merge_error")}
+        await store.set_memory("state", "last_errors", json.dumps(err, ensure_ascii=False), {})
+    except Exception:
+        log.exception("错误状态写入失败")
     return stats
 
 

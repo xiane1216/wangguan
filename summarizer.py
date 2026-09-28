@@ -3,6 +3,7 @@
 模型：deepseek-flash（DeepSeek-V4.1-Flash 的官方 API 名）。
 所有总结都带防幻觉铁律：只概括真实聊过、原文明确出现的内容，禁止编造。
 """
+import asyncio
 import logging
 import re
 
@@ -46,14 +47,19 @@ async def _chat(messages: list, max_tokens: int, temperature: float) -> str:
         "stream": False,
     }
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20, read=180, write=20, pool=20)) as client:
-        r = await client.post(
-            f"{config.DEEPSEEK_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
+        for attempt in range(2):
+            r = await client.post(
+                f"{config.DEEPSEEK_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            if r.status_code == 429 and attempt == 0:
+                await asyncio.sleep(30)  # 限流：等半分钟重试一次
+                continue
+            break
     if r.status_code >= 400:
         raise RuntimeError(f"DeepSeek HTTP {r.status_code}: {r.text[:300]}")
     data = r.json()
