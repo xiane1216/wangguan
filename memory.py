@@ -159,9 +159,11 @@ async def get_window_block(system_text: str, first_user_text: str):
     now = time.time()
     hit = _windows.get(key)
     if hit:
-        ttl = config.WINDOW_TTL_HOURS * 3600 if hit["block"] else 600
+        # 缺"上窗原文"段的窗口视为不完整：10分钟后自动重建（自愈同步延迟）
+        complete = bool(hit["block"]) and ("=== 三、" in hit["block"])
+        ttl = config.WINDOW_TTL_HOURS * 3600 if complete else 600
         if now - hit["ts"] < ttl:
-            if hit["block"]:
+            if complete:
                 hit["ts"] = now  # 活跃窗口滑动续期
             return hit["block"], key
     block = ""

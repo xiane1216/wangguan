@@ -121,6 +121,10 @@ async def chat_completions(request: Request):
     if info["first_user"]:
         try:
             block, wkey = await memory.get_window_block(info["system"], info["first_user"])
+            if block:
+                total_chars = sum(len(memory._text_of(x.get("content"))) for x in messages)
+                log.info("开窗注入：块 %d 字符；请求 %d 条消息 / %d 字符；窗口 %s",
+                         len(block), len(messages), total_chars, wkey)
         except Exception:
             log.exception("窗口记忆装配异常")
             block = None
