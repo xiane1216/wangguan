@@ -295,6 +295,7 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             continue
         fails = 0
         if not summary.strip():
+            stats["day_errors"][str(day)] = "模型返回空内容（推理烧光了max_tokens）"
             continue
         await store.set_memory("daily", str(day), summary, {"messages": len(day_rows)})
         stats["days_summarized"].append(str(day))
@@ -324,7 +325,8 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
                 continue
             fails = 0
             if not note.strip():
-                note = "（当天无值得归档的内容）"
+                stats["day_errors"]["archive:" + str(day)] = "模型返回空内容（推理烧光了max_tokens）"
+                continue
             await store.set_memory("rough", str(day), note, {})
             await store.set_memory("state", "absorbed_until", str(day), {})
             stats["days_archived"].append(str(day))
