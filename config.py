@@ -22,7 +22,7 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
 SUMMARY_MODEL = os.environ.get("SUMMARY_MODEL", "deepseek-flash").strip()
 SUMMARY_TEMPERATURE = _float("SUMMARY_TEMPERATURE", 0.2)
-SUMMARY_MAX_TOKENS = _int("SUMMARY_MAX_TOKENS", 16000)  # flash推理就要烧8-12K token，不给够正文出不来
+SUMMARY_MAX_TOKENS = _int("SUMMARY_MAX_TOKENS", 24000)  # flash推理烧16K+是常态（实测满一天的记录能把16K全烧光），不给够正文出不来
 
 # ---- Supabase（读聊天记录 chat_messages + 存网关自己的记忆表 gateway_memory） ----
 # 注意：网关部署在海外，这里填 Supabase 的"原始"项目地址（xxx.supabase.co），不要填中转域名
