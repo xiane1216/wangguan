@@ -75,17 +75,30 @@ async def fetch_recent_chats(limit: int = 600) -> list:
     return rows
 
 
-async def fetch_chats_between(start_date, end_date, limit: int = 8000) -> list:
-    """取 [start_date, end_date) 之间的聊天记录，按时间升序。start/end 是 date 对象。"""
-    q = (
+async def fetch_chats_between(start_date, end_date, limit: int = 20000) -> list:
+    """取 [start_date, end_date) 之间的聊天记录，按时间升序。start/end 是 date 对象。
+
+    重要：Supabase 托管接口单次请求最多只返回约 1000 行。
+    必须用 offset 翻页拉全，否则只能拿到范围内最旧的一批
+    （这就是之前"9/5 之后的记录凭空消失"的原因）。
+    """
+    base = (
         f"select=id,assistant_id,conversation_id,role,content,created_at"
-        f"&created_at=gte.{start_date.isoformat()}&created_at=lt.{end_date.isoformat()}"
+        f"&created_at=gte.{start_date.isoformat()}"
+        f"&created_at=lt.{end_date.isoformat()}"
         f"&order=created_at.asc,id.asc"
     )
     if config.ASSISTANT_ID:
-        q += f"&assistant_id=eq.{config.ASSISTANT_ID}"
-    q += f"&limit={max(1, min(limit, 20000))}"
-    return await _sb_get(config.CHAT_TABLE, q)
+        base += f"&assistant_id=eq.{config.ASSISTANT_ID}"
+    cap = max(1, min(limit, 20000))
+    out, offset = [], 0
+    while offset < cap:
+        rows = await _sb_get(config.CHAT_TABLE, f"{base}&limit=1000&offset={offset}")
+        if not rows:
+            break
+        out.extend(rows)
+        offset += len(rows)  # 按实际返回条数推进，兼容服务端更小的单页上限
+    return out[:cap]
 
 
 # ---- 网关记忆（gateway_memory） ----
