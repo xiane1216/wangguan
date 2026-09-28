@@ -338,7 +338,7 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
         except Exception:
             log.exception("读取粗略归档失败")
             rough_rows = []
-        roughs = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}"
+        roughs = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()[:300]}"
                   for r in rough_rows if (r.get("content") or "").strip()]
         if roughs:
             existing_lt = (await store.get_longterm() or "").strip()

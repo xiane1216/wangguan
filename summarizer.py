@@ -73,7 +73,14 @@ async def _chat(messages: list, max_tokens: int, temperature: float) -> str:
     if not content:
         # 思考型模型可能把 max_tokens 全部烧在推理上导致正文为空。
         # 铁律：reasoning_content 是思考过程，不是答案，绝不能存成记忆。
-        raise RuntimeError("模型没有产出正文（推理可能耗尽了 max_tokens，请调大 SUMMARY_MAX_TOKENS）")
+        choice = (data.get("choices") or [{}])[0]
+        finish = choice.get("finish_reason")
+        usage = data.get("usage") or {}
+        rc = str(message.get("reasoning_content") or "")
+        raise RuntimeError(
+            f"模型没有产出正文 finish={finish} completion_tokens={usage.get('completion_tokens')} "
+            f"reasoning_chars={len(rc)}（推理烧光了max_tokens，需减小输入或加大上限）"
+        )
     return _clean(content)
 
 
@@ -99,7 +106,8 @@ def transcript(rows: list, max_messages: int = 400, clip: int = 2000) -> str:
 
 async def summarize_day(date_str: str, rows: list) -> str:
     """详细每日概括（最近3天用）。"""
-    text = transcript(rows)
+    # 大日子输入瘦身：条数和单条长度都收着，防推理把max_tokens烧光
+    text = transcript(rows, max_messages=300, clip=1500)
     if not text.strip():
         return ""
     prompt = prompts.DAILY_SUMMARY.format(
