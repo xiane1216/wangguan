@@ -17,6 +17,23 @@ log = logging.getLogger(__name__)
 _THINK_OPEN = "\u003c\u0074\u0068\u0069\u006e\u006b\u003e"
 _THINK_CLOSE = "\u003c\u002f\u0074\u0068\u0069\u006e\u006b\u003e"
 
+# 正文起始标记：prompt 要求模型输出第一行必须是它。
+# 只取「最后一次出现」之后的内容，标记之前的推理/复述/废话一律丢弃。
+_MARKER = "「记忆归档开始」"
+
+
+def _clean(text: str) -> str:
+    text = str(text or "")
+    # 1) 去掉成对思考标签及其中内容
+    text = re.sub(re.escape(_THINK_OPEN) + r".*?" + re.escape(_THINK_CLOSE), "", text, flags=re.S)
+    # 2) 去掉落单的思考标签
+    text = text.replace(_THINK_OPEN, "").replace(_THINK_CLOSE, "")
+    # 3) 截取正文起始标记之后的内容（防推理泄漏）
+    idx = text.rfind(_MARKER)
+    if idx >= 0:
+        text = text[idx + len(_MARKER):]
+    return text.strip()
+
 
 async def _chat(messages: list, max_tokens: int, temperature: float) -> str:
     if not config.deepseek_ready():
@@ -41,13 +58,12 @@ async def _chat(messages: list, max_tokens: int, temperature: float) -> str:
         raise RuntimeError(f"DeepSeek HTTP {r.status_code}: {r.text[:300]}")
     data = r.json()
     message = ((data.get("choices") or [{}])[0]).get("message") or {}
-    content = message.get("content") or ""
-    if not str(content).strip():
-        # 个别情况正文为空、思考里有内容，兜底取思考文本
-        content = message.get("reasoning_content") or ""
-    content = re.sub(re.escape(_THINK_OPEN) + r".*?" + re.escape(_THINK_CLOSE), "", str(content), flags=re.S)
-    content = content.replace(_THINK_OPEN, "").replace(_THINK_CLOSE, "")
-    return content.strip()
+    content = str(message.get("content") or "").strip()
+    if not content:
+        # 思考型模型可能把 max_tokens 全部烧在推理上导致正文为空。
+        # 铁律：reasoning_content 是思考过程，不是答案，绝不能存成记忆。
+        raise RuntimeError("模型没有产出正文（推理可能耗尽了 max_tokens，请在 Zeabur 调大 SUMMARY_MAX_TOKENS）")
+    return _clean(content)
 
 
 def _clip(s: str, n: int) -> str:
@@ -92,8 +108,9 @@ async def merge_longterm(existing: str, daily_texts: list) -> str:
         longterm=(existing or "").strip() or "（暂无）",
         dailies="\n\n".join(daily_texts),
     )
+    # 合并任务输入大，多给 2000 token 余量
     return await _chat(
         [{"role": "user", "content": prompt}],
-        config.SUMMARY_MAX_TOKENS + 800,
+        config.SUMMARY_MAX_TOKENS + 2000,
         config.SUMMARY_TEMPERATURE,
     )
