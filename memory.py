@@ -369,6 +369,16 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
                     log.exception("清理已消化的粗略归档失败")
                 log.info("长期记忆已合并（%d 条粗略归档）", len(roughs))
 
+    # 4) 清理：滑出近期窗口的每日概括是死数据（内容已并入长期记忆），删掉防止表越积越大
+    if not stats.get("aborted"):
+        try:
+            stats["stale_dailies_deleted"] = await store.delete_dailies_before(str(recent_from))
+            if stats["stale_dailies_deleted"]:
+                log.info("已清理 %d 条滑出近期窗口的旧每日概括", stats["stale_dailies_deleted"])
+        except Exception:
+            stats["stale_dailies_deleted"] = -1
+            log.exception("清理过期每日概括失败")
+
     return await _finish_refresh(stats)
 
 

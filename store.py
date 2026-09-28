@@ -141,6 +141,22 @@ async def delete_roughs():
         raise RuntimeError(f"清理 rough 失败: HTTP {r.status_code} {r.text[:200]}")
 
 
+async def delete_dailies_before(min_date_str: str) -> int:
+    """删除某日期之前的每日概括（已滑出近期窗口、并入长期记忆的死数据）。返回删除条数。"""
+    if not config.supabase_ready():
+        return 0
+    url = f"{config.SUPABASE_URL}/rest/v1/{config.MEMORY_TABLE}?kind=eq.daily&scope=lt.{min_date_str}"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.delete(url, headers=_headers("return=representation"))
+    if r.status_code >= 400:
+        raise RuntimeError(f"清理 daily 失败: HTTP {r.status_code} {r.text[:200]}")
+    try:
+        data = r.json()
+        return len(data) if isinstance(data, list) else 0
+    except Exception:
+        return 0
+
+
 async def get_state(scope: str) -> str | None:
     rows = await _sb_get(config.MEMORY_TABLE, f"select=content&kind=eq.state&scope=eq.{scope}&limit=1")
     if not rows:
