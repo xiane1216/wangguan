@@ -25,6 +25,7 @@ import config
 import memory
 import ob_client
 import store
+import summarizer
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
@@ -211,6 +212,30 @@ async def admin_refresh(request: Request):
     return JSONResponse({"ok": True, "ob_seeded": seeded, **stats})
 
 
+async def admin_restyle(request: Request):
+    """把旧格式的长期记忆改写为第一人称（称呼统一为 USER_LABEL）。"""
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        existing = (await store.get_longterm() or "").strip()
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"读取失败: {exc}"}, status_code=500)
+    if not existing:
+        return JSONResponse({"ok": False, "error": "长期记忆为空，无需改写"})
+    try:
+        text = await summarizer.restyle_longterm(existing)
+    except Exception as exc:
+        log.exception("长期记忆改写失败")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    if not text.strip():
+        return JSONResponse({"ok": False, "error": "模型返回了空内容，未做修改"})
+    try:
+        await store.set_memory("longterm", "", text, {"source": "restyle"})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"保存失败: {exc}"}, status_code=500)
+    return JSONResponse({"ok": True, "before_chars": len(existing), "after_chars": len(text)})
+
+
 async def admin_import_ob(request: Request):
     if not _check_admin(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -288,6 +313,7 @@ app = Starlette(routes=[
     Route("/v1/chat/completions", chat_completions, methods=["POST"]),
     Route("/admin/memory", admin_memory, methods=["GET"]),
     Route("/admin/refresh", admin_refresh, methods=["GET", "POST"]),
+    Route("/admin/restyle", admin_restyle, methods=["GET", "POST"]),
     Route("/admin/import_ob", admin_import_ob, methods=["GET", "POST"]),
     Route("/admin/preview", admin_preview, methods=["GET"]),
 ], lifespan=lifespan)

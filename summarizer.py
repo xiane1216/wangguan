@@ -143,10 +143,22 @@ async def rough_from_raw(date_str: str, rows: list) -> str:
 
 async def rough_from_summary(date_str: str, daily_text: str) -> str:
     """把已有的详细每日概括压缩成粗略归档（更省输入）。"""
-    prompt = prompts.ROUGH_FROM_SUMMARY.format(date=date_str, daily=daily_text)
+    prompt = prompts.ROUGH_FROM_SUMMARY.format(date=date_str, daily=daily_text, user_label=config.USER_LABEL)
     return await _chat(
         [{"role": "user", "content": prompt}],
         1200,
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
+async def restyle_longterm(text: str) -> str:
+    """把旧格式（第三人称/"用户"称呼）的长期记忆改写为第一人称，内容不变。"""
+    if not (text or "").strip():
+        return ""
+    prompt = prompts.RESTYLE.format(longterm=text.strip(), user_label=config.USER_LABEL)
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        config.SUMMARY_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
 
@@ -157,6 +169,7 @@ async def merge_longterm(existing: str, rough_texts: list) -> str:
         longterm=(existing or "").strip() or "（暂无）",
         roughs="\n".join(rough_texts),
         max_chars=config.LONGTERM_MAX_CHARS,
+        user_label=config.USER_LABEL,
     )
     return await _chat(
         [{"role": "user", "content": prompt}],

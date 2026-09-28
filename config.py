@@ -46,8 +46,8 @@ LAST_WINDOW_MESSAGES = _int("LAST_WINDOW_MESSAGES", 20)  # "上个窗口原始�
 MAX_BACKFILL_DAYS = _int("MAX_BACKFILL_DAYS", 30)        # 首次部署最多往回总结多少天历史
 LONGTERM_MAX_CHARS = _int("LONGTERM_MAX_CHARS", 2000)    # 长期记忆全文上限（字）
 TIMEZONE = os.environ.get("TIMEZONE", "Asia/Shanghai")
-USER_LABEL = os.environ.get("USER_LABEL", "用户")
-AI_LABEL = os.environ.get("AI_LABEL", "AI")
+USER_LABEL = os.environ.get("USER_LABEL", "宝宝")  # 记忆里对用户的称呼
+AI_LABEL = os.environ.get("AI_LABEL", "我")          # 记录里 AI 的自称（第一人称）
 UPSTREAM_READ_TIMEOUT = _int("UPSTREAM_READ_TIMEOUT", 300)  # 上游长回复读超时（秒）
 WINDOW_TTL_HOURS = _float("WINDOW_TTL_HOURS", 1.0)       # 空闲窗口多久后允许重建（活跃窗口永不重建）
 
