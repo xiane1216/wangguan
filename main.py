@@ -149,14 +149,27 @@ async def index(_: Request):
 async def models_endpoint(_: Request):
     if not config.deepseek_ready():
         return JSONResponse({"object": "list", "data": []})
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{config.DEEPSEEK_BASE_URL}/models",
-                             headers={"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"})
+    client = _get_shared_client()
+    r = await client.get(f"{config.DEEPSEEK_BASE_URL}/models",
+                         headers={"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"})
     return Response(r.content, status_code=r.status_code, media_type="application/json",
                     headers={"Cache-Control": "no-store"})
 
 
 # ---- 对话代理（核心） ----
+
+# 全局共享 httpx 客户端：所有请求复用连接池，TLS 握手只做一次。
+# 直连快而网关慢的主因就是这里每次请求都新建+关闭客户端（每条消息多一次 TLS 握手）。
+_shared_client: httpx.AsyncClient | None = None
+
+
+def _get_shared_client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        timeout = httpx.Timeout(connect=30, read=config.UPSTREAM_READ_TIMEOUT, write=30, pool=30)
+        _shared_client = httpx.AsyncClient(timeout=timeout, http2=False)
+    return _shared_client
+
 
 async def chat_completions(request: Request):
     if not _check_gateway(request):
@@ -193,17 +206,14 @@ async def chat_completions(request: Request):
     target = f"{config.DEEPSEEK_BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
                "Content-Type": "application/json"}
-    timeout = httpx.Timeout(connect=30, read=config.UPSTREAM_READ_TIMEOUT, write=30, pool=30)
-    client = httpx.AsyncClient(timeout=timeout, http2=False)
+    client = _get_shared_client()  # 复用全局连接池，不新建不关闭
 
     if not want_stream:
         try:
             r = await client.post(target, headers=headers, json=payload)
         except Exception as exc:
-            await client.aclose()
             log.exception("上游请求失败")
             return JSONResponse({"error": {"message": f"上游请求失败: {type(exc).__name__}"}}, status_code=502)
-        await client.aclose()
         return Response(r.content, status_code=r.status_code, media_type="application/json",
                         headers={"Cache-Control": "no-store"})
 
@@ -215,15 +225,17 @@ async def chat_completions(request: Request):
                     err = {"error": {"message": f"上游 DeepSeek HTTP {resp.status_code}: {body}"}}
                     yield f"data: {json.dumps(err, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
                     return
-                # 逐字节原样转发：流式、思考链、工具调用全部不动
+                # 逐字节原样转发：流式、思考链、工具调用全部不动。
+                # 注意：不要改成 aiter_lines() 逐行转发——SSE 事件可能是多行的
+                # （event:/data:/空行），逐行+补换行会把一个事件拆成两个，
+                # 破坏事件边界。aiter_bytes() 原样转发才是正确做法。
                 async for chunk in resp.aiter_bytes():
                     yield chunk
         except Exception as exc:
             log.exception("流式转发中断")
             err = {"error": {"message": f"网关到上游的连接中断: {type(exc).__name__}"}}
             yield f"data: {json.dumps(err, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
-        finally:
-            await client.aclose()
+        # 不 close 客户端：全局复用，留给下一个请求
 
     return StreamingResponse(relay(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
@@ -377,6 +389,11 @@ async def lifespan(app):
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
+    # 关闭共享连接池
+    global _shared_client
+    if _shared_client is not None and not _shared_client.is_closed:
+        await _shared_client.aclose()
+    _shared_client = None
 
 
 async def console(_: Request):
