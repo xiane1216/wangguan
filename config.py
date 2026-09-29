@@ -50,6 +50,12 @@ USER_LABEL = os.environ.get("USER_LABEL", "宝宝")  # 记忆里对用户的称�
 AI_LABEL = os.environ.get("AI_LABEL", "我")          # 记录里 AI 的自称（第一人称）
 UPSTREAM_READ_TIMEOUT = _int("UPSTREAM_READ_TIMEOUT", 300)  # 上游长回复读超时（秒）
 WINDOW_TTL_HOURS = _float("WINDOW_TTL_HOURS", 1.0)       # 空闲窗口多久后允许重建（活跃窗口永不重建）
+AUTO_REFRESH = os.environ.get("AUTO_REFRESH", "0") == "1"  # 是否启用后台自动刷新（默认关闭，用 UI 手动触发）
+
+# ---- bugfix 新增参数 ----
+ROUGH_MAX_TOKENS = _int("ROUGH_MAX_TOKENS", 8000)          # 粗略归档 max_tokens（原 1200 会被推理烧光导致空正文）
+NEW_WINDOW_REDETECT_SECONDS = _float("NEW_WINDOW_REDETECT_SECONDS", 300)  # 缓存命中但 0 条 assistant 回复且超过此秒数 → 视为同开场白新窗，强制重建
+CUR_WINDOW_MAX_AGE_HOURS = _float("CUR_WINDOW_MAX_AGE_HOURS", 6.0)        # 定位"当前窗口"时只看最近 N 小时的 user 消息（防陈年问候语误匹配）
 
 
 def supabase_ready() -> bool:

@@ -68,13 +68,33 @@ def _window_key(system_text: str, first_user: str) -> str:
     return hashlib.sha256(((system_text or "") + "\x00" + (first_user or "")).encode("utf-8")).hexdigest()[:16]
 
 
-async def previous_window_rows(first_user_text: str) -> list:
-    """从 Supabase 最近的聊天记录里找到"上一个窗口"，取它的最后 N 条。"""
+def _parse_walltime(value) -> "datetime | None":
+    """解析 App 写入的"墙上时钟"字符串（yyyy-MM-dd HH:mm:ss，被 Postgres 错标为 UTC）。
+    返回 naive datetime，用于与 _now() 的墙上时钟直接比较（不做时区换算）。"""
+    s = str(value or "").strip()
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        try:
+            return datetime.strptime(s[:10], "%Y-%m-%d")
+        except Exception:
+            return None
+
+
+async def previous_window_rows(first_user_text: str) -> tuple[list, bool]:
+    """从 Supabase 最近的聊天记录里找到"上一个窗口"，取它的最后 N 条。
+
+    返回 (rows, confident_no_history)：
+    - confident_no_history=True 表示库里除当前窗口外没有任何其他会话，
+      "没有上个窗口"是事实而非同步延迟（用于缓存完整判断，避免每10分钟空重建）。
+    """
     rows = await store.fetch_recent_chats(limit=600)
     rows = [r for r in rows
             if r.get("role") in ("user", "assistant") and (r.get("content") or "").strip()]
     if not rows:
-        return []
+        return [], True
     # 同一秒同内容的重复行去重
     seen, dedup = set(), []
     for r in rows:
@@ -85,14 +105,24 @@ async def previous_window_rows(first_user_text: str) -> list:
         dedup.append(r)
     rows = dedup
 
-    # 用当前窗口的第一条用户消息，在最近同步的记录里定位"当前窗口"的会话
+    # 用当前窗口的第一条用户消息，在最近同步的记录里定位"当前窗口"的会话。
+    # bugfix（Bug 3）：只考虑最近 CUR_WINDOW_MAX_AGE_HOURS 内的 user 消息，
+    # 防止陈年问候语（"在吗"/"早"）误匹配到几天前的旧会话。
+    now_wall = _now().replace(tzinfo=None)
+    max_age = timedelta(hours=config.CUR_WINDOW_MAX_AGE_HOURS)
     cur_conv = None
     probe = (first_user_text or "").strip()[:50]
     if probe:
         for r in reversed(rows):
-            if r.get("role") == "user" and str(r.get("content") or "").strip().startswith(probe):
-                cur_conv = r.get("conversation_id") or "__none__"
-                break
+            if r.get("role") != "user":
+                continue
+            if not str(r.get("content") or "").strip().startswith(probe):
+                continue
+            wt = _parse_walltime(r.get("created_at"))
+            if wt is None or (now_wall - wt) > max_age:
+                continue  # 太老的匹配视为误匹配
+            cur_conv = r.get("conversation_id") or "__none__"
+            break
 
     # 按会话分组（保持时间顺序）
     order, convs = [], {}
@@ -109,11 +139,15 @@ async def previous_window_rows(first_user_text: str) -> list:
             if c != cur_conv:
                 prev = c
                 break
+        if prev is None:
+            return [], True  # 库里只有当前窗口自己：确认无历史
     else:
+        if not order:
+            return [], True  # 库里没有任何会话：确认无历史
         prev = order[-1] if order else None  # 当前窗口还没同步上去：最新会话就是上个窗口
     if prev is None:
-        return []
-    return convs[prev][-config.LAST_WINDOW_MESSAGES:]
+        return [], True
+    return convs[prev][-config.LAST_WINDOW_MESSAGES:], False
 
 
 def build_block_text(longterm, dailies, last_rows) -> str:
@@ -142,39 +176,56 @@ def build_block_text(longterm, dailies, last_rows) -> str:
     return header + "\n\n" + "\n\n".join(parts)
 
 
-async def _build_block(first_user_text: str) -> str:
+async def _build_block(first_user_text: str) -> tuple[str, bool]:
+    """构建记忆块。返回 (block, complete)：complete 表示"没有第三段"是确定事实
+    （库里确实没有历史），而非同步延迟——用于冻结缓存判断。"""
     if not config.supabase_ready():
-        return ""
+        return "", True
     longterm = await store.get_longterm()
     min_day = (_now() - timedelta(days=config.RECENT_DAYS - 1)).strftime("%Y-%m-%d")
     dailies = await store.get_recent_dailies(min_day)
-    last_rows = await previous_window_rows(first_user_text)
-    return build_block_text(longterm, dailies, last_rows)
+    last_rows, confident_no_history = await previous_window_rows(first_user_text)
+    block = build_block_text(longterm, dailies, last_rows)
+    return block, (bool(block) or confident_no_history)
 
 
-async def get_window_block(system_text: str, first_user_text: str):
+async def get_window_block(system_text: str, first_user_text: str, assistant_count: int = 0):
     """返回 (block, window_key)。窗口生命周期内冻结：活跃窗口滑动续期，永不中途重建，
-    保证前缀缓存稳定；空结果 10 分钟后允许重试。"""
+    保证前缀缓存稳定；空结果 10 分钟后允许重试。
+
+    bugfix（Bug 2）：缓存命中但当前请求 0 条 assistant 回复、且缓存已超过
+    NEW_WINDOW_REDETECT_SECONDS —— 说明是"用相同开场白开的新窗"（真正活跃的
+    窗口在几分钟内几乎必然产生过 assistant 回复），强制重建，避免把上上个
+    窗口的内容当成"上个窗口"注入。
+    """
     key = _window_key(system_text, first_user_text)
     now = time.time()
     hit = _windows.get(key)
     if hit:
-        # 缺"上窗原文"段的窗口视为不完整：10分钟后自动重建（自愈同步延迟）
-        complete = bool(hit["block"]) and ("=== 三、" in hit["block"])
+        complete = bool(hit.get("complete"))
         ttl = config.WINDOW_TTL_HOURS * 3600 if complete else 600
         if now - hit["ts"] < ttl:
-            if complete:
-                hit["ts"] = now  # 活跃窗口滑动续期
-            return hit["block"], key
-    block = ""
+            stale_new_window = (
+                assistant_count == 0
+                and (now - hit["ts"]) > config.NEW_WINDOW_REDETECT_SECONDS
+            )
+            if not stale_new_window:
+                if complete:
+                    hit["ts"] = now  # 活跃窗口滑动续期
+                return hit["block"], key
+    block, complete = "", False
     try:
-        block = await _build_block(first_user_text)
+        block, complete = await _build_block(first_user_text)
     except Exception:
         log.exception("构建窗口记忆失败（本次请求将不注入）")
-        block = ""
-    _windows[key] = {"block": block or None, "ts": now}
+        block, complete = "", False
+    _windows[key] = {"block": block or None, "ts": now, "complete": bool(complete)}
     if len(_windows) > 200:
-        _windows.pop(next(iter(_windows)))
+        # bugfix（Bug 4）：按最近使用时间驱逐（LRU），而不是 FIFO。
+        # 原来的 next(iter()) 按插入顺序驱逐，活跃窗口续期只改 ts 不改位置，
+        # 最早插入但一直活跃的窗口会最先被驱逐，破坏"窗口内冻结"承诺。
+        oldest_key = min(_windows, key=lambda k: _windows[k]["ts"])
+        _windows.pop(oldest_key)
     return block or None, key
 
 
@@ -192,7 +243,7 @@ async def build_preview(first_user_hint: str = "") -> dict:
     longterm = await store.get_longterm()
     min_day = (_now() - timedelta(days=config.RECENT_DAYS - 1)).strftime("%Y-%m-%d")
     dailies = await store.get_recent_dailies(min_day)
-    last_rows = await previous_window_rows(first_user)
+    last_rows, _no_history = await previous_window_rows(first_user)
     block = build_block_text(longterm, dailies, last_rows)
     return {
         "first_user_matched": first_user[:50],
@@ -235,6 +286,14 @@ def _meta_tz_fixed(row: dict) -> bool:
     """带 tz_fix 标记 = 时区修复之后生成的概括；旧概括缺标记，需强制重生成一次。"""
     try:
         return bool(json.loads(row.get("meta") or "{}").get("tz_fix"))
+    except Exception:
+        return False
+
+
+def _meta_merged(row: dict) -> bool:
+    """rough 行的 meta.merged=1 表示已并入长期记忆（防止重复合并）。"""
+    try:
+        return bool(json.loads(row.get("meta") or "{}").get("merged"))
     except Exception:
         return False
 
@@ -313,12 +372,23 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
         stats["days_summarized"].append(str(day))
         log.info("已生成 %s 的详细概括（%d 条消息）", day, len(day_rows))
 
-    # 2) 粗略归档：老于 RECENT_DAYS 且没归档过的日子，一天压成一两句话
+    # 2) 粗略归档：老于 RECENT_DAYS 且还没有 rough 行的日子，一天压成一两句话。
+    # bugfix（Bug 1）：消化判断从"absorbed_until 推进"改为"该天 rough 行是否存在"。
+    # 原逻辑：归档 9/20、9/21、9/22 时 9/20 失败，9/21、9/22 成功会把 absorbed_until
+    # 推到 9/22 → 9/20 被 d > absorbed_until 永久排除，随后 daily 清理又删掉它的
+    # 每日概括 → 这一天的两级记忆彻底蒸发。现在：失败的天没有 rough 行，
+    # 下一轮自动重试；成功的天有 rough 行，永不重做。原始记录 chat_messages
+    # 网关从不删除，所以重试永远有原料。
     if not stats.get("aborted"):
-        absorbed_until = _parse_date(await store.get_state("absorbed_until") or "")
+        try:
+            rough_rows_all = await store.get_all_roughs(limit=400)
+        except Exception:
+            log.exception("读取粗略归档失败")
+            rough_rows_all = []
+        rough_scopes = {str(r.get("scope") or "") for r in rough_rows_all}
         archive_days = [d for d in sorted(by_day.keys())
                         if (today - d).days >= config.RECENT_DAYS
-                        and (absorbed_until is None or d > absorbed_until)]
+                        and str(d) not in rough_scopes]
         for day in archive_days[:_MAX_ARCHIVE_PER_CYCLE]:
             day_rows = by_day[day]
             existing = await store.get_daily(str(day))
@@ -339,19 +409,24 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             if not note.strip():
                 stats["day_errors"]["archive:" + str(day)] = "模型返回空内容（推理烧光了max_tokens）"
                 continue
-            await store.set_memory("rough", str(day), note, {})
+            await store.set_memory("rough", str(day), note, {"merged": 0})
+            # absorbed_until 仅作展示/兼容保留，不再参与消化判断
             await store.set_memory("state", "absorbed_until", str(day), {})
             stats["days_archived"].append(str(day))
 
-    # 3) 长期记忆：把全部粗略归档合并成"这个月的大概"，合并成功后清掉粗归档
+    # 3) 长期记忆：把"还没合并过"的粗略归档合并成"这个月的大概"。
+    # bugfix（配合 Bug 1）：不再 delete_roughs()，改为逐行标记 meta.merged=1。
+    # rough 行是"该天已归档"的唯一凭证，删掉会导致已归档日子被重复归档并
+    # 重复合并进长期记忆；merged 标记保证 merge 只处理新增的 rough。
     if not stats.get("aborted"):
         try:
-            rough_rows = await store.get_all_roughs()
+            rough_rows = await store.get_all_roughs(limit=400)
         except Exception:
             log.exception("读取粗略归档失败")
             rough_rows = []
+        pending_roughs = [r for r in rough_rows if not _meta_merged(r)]
         roughs = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()[:300]}"
-                  for r in rough_rows if (r.get("content") or "").strip()]
+                  for r in pending_roughs if (r.get("content") or "").strip()]
         if roughs:
             existing_lt = (await store.get_longterm() or "").strip()
             try:
@@ -363,11 +438,15 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             if merged.strip():
                 await store.set_memory("longterm", "", merged, {"source": "gateway_merge"})
                 stats["longterm_updated"] = True
-                try:
-                    await store.delete_roughs()  # 已消化，清掉
-                except Exception:
-                    log.exception("清理已消化的粗略归档失败")
-                log.info("长期记忆已合并（%d 条粗略归档）", len(roughs))
+                marked = 0
+                for r in pending_roughs:
+                    try:
+                        await store.set_memory("rough", str(r.get("scope") or ""),
+                                               r.get("content") or "", {"merged": 1})
+                        marked += 1
+                    except Exception:
+                        log.exception("标记 rough merged 失败 scope=%s", r.get("scope"))
+                log.info("长期记忆已合并（%d 条未合并粗略归档，标记 %d 条）", len(roughs), marked)
 
     # 4) 清理：滑出近期窗口的每日概括是死数据（内容已并入长期记忆），删掉防止表越积越大
     if not stats.get("aborted"):

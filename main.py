@@ -18,7 +18,7 @@ import httpx
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 import config
@@ -173,7 +173,7 @@ async def chat_completions(request: Request):
     xrec = _xray_base(payload, messages)
     if info["first_user"]:
         try:
-            block, wkey = await memory.get_window_block(info["system"], info["first_user"])
+            block, wkey = await memory.get_window_block(info["system"], info["first_user"], info["assistant_count"])
             if block:
                 total_chars = sum(len(memory._text_of(x.get("content"))) for x in messages)
                 log.info("开窗注入：块 %d 字符；请求 %d 条消息 / %d 字符；窗口 %s",
@@ -226,7 +226,8 @@ async def chat_completions(request: Request):
             await client.aclose()
 
     return StreamingResponse(relay(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
 
 
 # ---- 管理接口 ----
@@ -351,6 +352,9 @@ async def debug_xray(request: Request):
 # ---- 后台任务 ----
 
 async def background_worker():
+    if not config.AUTO_REFRESH:
+        log.info("AUTO_REFRESH=0，后台自动刷新已关闭。请在 /console 手动触发。")
+        return
     await asyncio.sleep(3)
     while True:
         try:
@@ -375,8 +379,13 @@ async def lifespan(app):
         await task
 
 
+async def console(_: Request):
+    return FileResponse("console.html", media_type="text/html")
+
+
 app = Starlette(routes=[
     Route("/", index, methods=["GET"]),
+    Route("/console", console, methods=["GET"]),
     Route("/models", models_endpoint, methods=["GET"]),
     Route("/v1/models", models_endpoint, methods=["GET"]),
     Route("/chat/completions", chat_completions, methods=["POST"]),
@@ -392,4 +401,4 @@ app = Starlette(routes=[
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port, access_log=False)
+    uvicorn.run(app, host="0.0.0.0", port=port, access_log=False, timeout_keep_alive=120)

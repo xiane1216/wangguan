@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>记忆网关 · Console</title>
+<style>
+:root{
+  --bg:#0d0f14;--surface:#161922;--surface2:#1d2130;--border:#2a2f3e;
+  --text:#e2e5ec;--muted:#7a8094;--accent:#5b8cff;--accent2:#a78bfa;
+  --green:#34d399;--red:#f87171;--yellow:#fbbf24;
+  --radius:14px;--shadow:0 4px 24px rgba(0,0,0,.4);
+  font-family:'SF Pro Display',Inter,system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+a{color:var(--accent);text-decoration:none}
+
+/* layout */
+.shell{max-width:960px;margin:0 auto;padding:24px 20px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border);margin-bottom:8px;position:sticky;top:0;background:var(--bg);z-index:10}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-dot{width:10px;height:10px;border-radius:50%;background:var(--muted);transition:.3s}
+.brand-dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+.brand-name{font-weight:700;font-size:18px;letter-spacing:-.3px}
+.brand-sub{font-size:11px;color:var(--muted)}
+.nav{display:flex;gap:2px;margin:16px 0 24px;flex-wrap:wrap}
+.nav-btn{padding:9px 16px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;transition:.2s}
+.nav-btn:hover{color:var(--text);background:var(--surface)}
+.nav-btn.on{color:var(--accent);background:var(--surface);border-color:var(--border)}
+.panel{display:none;animation:fade .25s ease}
+.panel.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+
+/* cards */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px}
+.card h2{font-size:15px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.card h2 .badge{font-size:11px;font-weight:500;color:var(--muted);background:var(--surface2);padding:2px 8px;border-radius:6px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1}
+.muted{color:var(--muted);font-size:13px}
+.mono{font-family:'SF Mono',ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;line-height:1.6}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.stat{background:var(--surface2);border-radius:10px;padding:12px 14px}
+.stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.stat-value{font-size:20px;font-weight:700;margin-top:2px}
+
+/* form */
+.field{margin:10px 0}
+.field label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+.field input,.field textarea,.field select{
+  width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;
+  background:var(--surface2);color:var(--text);font-size:14px;outline:none;transition:.2s
+}
+.field input:focus,.field textarea:focus{border-color:var(--accent)}
+.field textarea{min-height:120px;resize:vertical;font-family:'SF Mono',ui-monospace,Consolas,monospace;font-size:12px;line-height:1.5}
+
+/* buttons */
+.btn{padding:9px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);color:var(--text);cursor:pointer;font-size:14px;transition:.2s}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));border:0;color:#fff;font-weight:600}
+.btn.primary:hover{opacity:.9;color:#fff}
+.btn.sm{padding:6px 12px;font-size:12px}
+.tag{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--surface2);border:1px solid var(--border)}
+.tag.green{color:var(--green);border-color:rgba(52,211,153,.3)}
+.tag.red{color:var(--red);border-color:rgba(248,113,113,.3)}
+
+/* chat */
+.chat-box{min-height:200px;max-height:42vh;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--surface2)}
+.chat-msg{padding:8px 0;border-bottom:1px solid var(--border)}
+.chat-msg:last-child{border:0}
+.chat-msg .role{font-size:11px;color:var(--muted);margin-bottom:3px}
+.chat-msg .content{font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.chat-msg.user .content{color:var(--text)}
+.chat-msg.assistant .content{color:var(--accent)}
+
+/* preview */
+.preview-box{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;max-height:500px;overflow-y:auto}
+
+/* dialog */
+dialog{border:0;border-radius:var(--radius);background:var(--surface);color:var(--text);padding:0;box-shadow:var(--shadow);max-width:480px;width:90vw}
+dialog::backdrop{background:rgba(0,0,0,.6);backdrop-filter:blur(4px)}
+dialog form{padding:24px}
+dialog h3{font-size:18px;margin-bottom:16px}
+
+/* xray */
+.xray-item{background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:8px}
+.xray-item .ts{font-size:11px;color:var(--muted)}
+
+/* responsive */
+@media(max-width:640px){.shell{padding:16px 12px}.stat-grid{grid-template-columns:1fr 1fr}.brand-sub{display:none}}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-dot" id="dot"></div>
+      <div>
+        <div class="brand-name">记忆网关</div>
+        <div class="brand-sub" id="sub">未连接</div>
+      </div>
+    </div>
+    <button class="btn sm" onclick="openSettings()">设置</button>
+  </div>
+
+  <nav class="nav" id="nav">
+    <button class="nav-btn on" data-p="status">状态</button>
+    <button class="nav-btn" data-p="memory">记忆</button>
+    <button class="nav-btn" data-p="preview">注入预览</button>
+    <button class="nav-btn" data-p="tools">工具</button>
+    <button class="nav-btn" data-p="xray">诊断</button>
+    <button class="nav-btn" data-p="chat">对话测试</button>
+  </nav>
+
+  <!-- 状态 -->
+  <div class="panel on" id="p-status">
+    <div class="card">
+      <h2>运行状态</h2>
+      <div class="stat-grid" id="statGrid"><div class="muted">连接后显示</div></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn sm" onclick="loadStatus()">刷新</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 记忆 -->
+  <div class="panel" id="p-memory">
+    <div class="card">
+      <h2>长期记忆 <span class="badge" id="ltBadge">—</span></h2>
+      <pre class="mono" id="ltView" style="max-height:300px;overflow:auto;background:var(--surface2);padding:14px;border-radius:10px">尚未加载</pre>
+    </div>
+    <div class="card">
+      <h2>近期每日概括</h2>
+      <div id="dailiesView" class="muted">尚未加载</div>
+    </div>
+    <div class="row" style="margin-bottom:14px">
+      <button class="btn sm" onclick="loadMemory()">刷新记忆</button>
+    </div>
+  </div>
+
+  <!-- 注入预览 -->
+  <div class="panel" id="p-preview">
+    <div class="card">
+      <h2>开窗注入预览</h2>
+      <p class="muted" style="margin-bottom:10px">模拟一次开窗时注入 system 的完整记忆块。留空则用最近一条用户消息。</p>
+      <div class="field"><input id="previewHint" placeholder="第一条用户消息（可选）"></div>
+      <button class="btn sm primary" onclick="loadPreview()">预览</button>
+    </div>
+    <div class="card">
+      <div class="preview-box"><pre class="mono" id="previewView">尚未加载</pre></div>
+    </div>
+  </div>
+
+  <!-- 工具 -->
+  <div class="panel" id="p-tools">
+    <div class="card">
+      <h2>记忆刷新 <span class="badge">手动</span></h2>
+      <p class="muted" style="margin-bottom:10px">把原始聊天记录总结成每日概括 + 合并长期记忆。建议每天聊完后点一次。会调用 DeepSeek API，稍等片刻。</p>
+      <div class="field"><label>强制重新总结最近 N 天（0 = 只补缺失的）</label><input id="refreshDays" value="0" style="width:80px"></div>
+      <button class="btn sm primary" onclick="runRefresh()">开始刷新</button>
+      <div id="refreshResult" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>长期记忆改写</h2>
+      <p class="muted" style="margin-bottom:10px">把旧格式长期记忆改写为第一人称叙述。</p>
+      <button class="btn sm" onclick="runRestyle()">改写</button>
+      <div id="restyleResult" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>从 Ombre Brain 导入</h2>
+      <p class="muted" style="margin-bottom:10px">长期记忆为空时搬运 OB 浮现记忆。已有内容时需确认覆盖。</p>
+      <div class="row">
+        <button class="btn sm" onclick="runImportOB('auto')">导入（自动）</button>
+        <button class="btn sm" onclick="runImportOB('replace')">强制覆盖</button>
+      </div>
+      <div id="obResult" class="muted" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <!-- 诊断 -->
+  <div class="panel" id="p-xray">
+    <div class="card">
+      <h2>请求透视 <span class="badge">最近10条</span></h2>
+      <p class="muted" style="margin-bottom:10px">只记数字和构成，不含聊天内容。</p>
+      <button class="btn sm" onclick="loadXray()">刷新</button>
+    </div>
+    <div id="xrayView"></div>
+  </div>
+
+  <!-- 对话测试 -->
+  <div class="panel" id="p-chat">
+    <div class="card">
+      <h2>流式对话测试</h2>
+      <p class="muted" style="margin-bottom:10px">直接调网关 /v1/chat/completions，验证流式和记忆注入是否正常。</p>
+      <div class="chat-box" id="chatLog"></div>
+      <div class="field" style="margin-top:10px"><textarea id="chatInput" placeholder="输入消息..." style="min-height:60px"></textarea></div>
+      <div class="row">
+        <button class="btn sm primary" onclick="sendChat()">发送</button>
+        <button class="btn sm" onclick="clearChat()">清空</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<dialog id="settingsDlg">
+  <form method="dialog">
+    <h3>连接设置</h3>
+    <div class="field"><label>Gateway URL</label><input id="gwUrl" placeholder="留空 = 当前域名"></div>
+    <div class="field"><label>Admin Key</label><input id="gwKey" type="password" placeholder="ADMIN_SECRET"></div>
+    <div class="field"><label>Gateway Key（对话测试用）</label><input id="gwChatKey" type="password" placeholder="GATEWAY_KEY"></div>
+    <p class="muted" style="font-size:12px;margin-bottom:14px">密钥只存在浏览器 sessionStorage。</p>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn sm" value="cancel">取消</button>
+      <button class="btn sm primary" value="ok">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $=id=>document.getElementById(id);
+const base=()=>($('gwUrl').value.trim()||location.origin).replace(/\/$/,'');
+const akey=()=>$('gwKey').value.trim();
+const ckey=()=>$('gwChatKey').value.trim();
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+async function api(path,opts={}){const url=base()+path+(path.includes('?')?'&':'?')+'key='+encodeURIComponent(akey());const r=await fetch(url,{...opts,headers:{...(opts.body!==undefined?{'Content-Type':'application/json'}:{}),...(opts.headers||{})}});if(!r.ok)throw new Error((await r.text())||'HTTP '+r.status);const ct=r.headers.get('content-type')||'';return ct.includes('json')?r.json():r.text()}
+
+// nav
+document.querySelectorAll('.nav-btn').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav-btn').forEach(x=>x.classList.toggle('on',x===b));document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('on',p.id==='p-'+b.dataset.p))});
+
+// settings
+function openSettings(){$('settingsDlg').showModal()}
+$('settingsDlg').addEventListener('close',()=>{
+  if($('settingsDlg').returnValue==='ok'){
+    sessionStorage.setItem('gw_url',$('gwUrl').value.trim());
+    sessionStorage.setItem('gw_key',$('gwKey').value);
+    sessionStorage.setItem('gw_chatkey',$('gwChatKey').value);
+    init();
+  }
+});
+function loadSettings(){
+  $('gwUrl').value=sessionStorage.getItem('gw_url')||'';
+  $('gwKey').value=sessionStorage.getItem('gw_key')||'';
+  $('gwChatKey').value=sessionStorage.getItem('gw_chatkey')||'';
+}
+
+// status
+async function loadStatus(){
+  try{
+    const d=await fetch(base()+'/',{headers:{}});if(!d.ok)throw new Error('HTTP '+d.status);const j=await d.json();
+    $('dot').classList.add('on');$('sub').textContent='已连接 · '+(j.deepseek_configured?'DeepSeek ✓':'DeepSeek ✗');
+    const items=[
+      ['DeepSeek',j.deepseek_configured?'已配置':'未配置',j.deepseek_configured?'green':'red'],
+      ['Supabase',j.supabase_configured?'已配置':'未配置',j.supabase_configured?'green':'red'],
+      ['长期记忆',j.longterm_chars!=null?j.longterm_chars+' 字':'—',''],
+      ['缓存窗口',j.cached_windows+' 个',''],
+      ['总结模型',j.summary_model||'—',''],
+      ['上次刷新',j.last_refresh?j.last_refresh.slice(0,16):'从未',''],
+    ];
+    $('statGrid').innerHTML=items.map(([l,v,t])=>`<div class="stat"><div class="stat-label">${l}</div><div class="stat-value">${t?`<span class="tag ${t}">${v}</span>`:v}</div></div>`).join('');
+    if(j.recent_daily&&j.recent_daily.length)$('dailiesView').innerHTML=j.recent_daily.map(d=>`<div class="row" style="margin-bottom:6px"><span class="tag">${d.date}</span><span class="muted">${d.chars} 字</span></div>`).join('');
+  }catch(e){$('dot').classList.remove('on');$('sub').textContent='连接失败';$('statGrid').innerHTML='<div class="muted" style="color:var(--red)">'+e.message+'</div>'}
+}
+
+// memory
+async function loadMemory(){
+  try{
+    const d=await api('/admin/memory');
+    $('ltBadge').textContent=(d.longterm_chars||0)+' 字';
+    $('ltView').textContent=d.longterm||'(空)';
+    if(d.recent_daily&&d.recent_daily.length){
+      $('dailiesView').innerHTML=d.recent_daily.map(dd=>`<div class="card" style="margin-bottom:8px;padding:12px"><div class="row" style="margin-bottom:6px"><span class="tag">${dd.date}</span><span class="muted">${dd.content?.length||0} 字</span></div><pre class="mono" style="max-height:200px;overflow:auto">${esc(dd.content||'')}</pre></div>`).join('');
+    }else{$('dailiesView').innerHTML='<span class="muted">无近期概括</span>'}
+  }catch(e){$('ltView').textContent='加载失败: '+e.message}
+}
+
+// preview
+async function loadPreview(){
+  try{
+    const hint=$('previewHint').value.trim();
+    const d=await api('/admin/preview'+(hint?('&first_user='+encodeURIComponent(hint)):''));
+    if(d.error){$('previewView').textContent='错误: '+d.error;return}
+    $('previewView').textContent=d.block||'(空 — 无记忆可注入)';
+  }catch(e){$('previewView').textContent='加载失败: '+e.message}
+}
+
+// tools
+async function runRefresh(){
+  $('refreshResult').innerHTML='<span class="spin"></span> 刷新中...';
+  try{
+    const days=$('refreshDays').value||'0';
+    const d=await api('/admin/refresh?days='+days,{method:'POST'});
+    $('refreshResult').innerHTML='<span class="tag green">完成</span> '+esc(JSON.stringify(d));
+  }catch(e){$('refreshResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+}
+async function runRestyle(){
+  $('restyleResult').innerHTML='<span class="spin"></span> 改写中...';
+  try{
+    const d=await api('/admin/restyle',{method:'POST'});
+    $('restyleResult').innerHTML='<span class="tag green">完成</span> '+(d.before_chars||0)+' → '+(d.after_chars||0)+' 字';
+  }catch(e){$('restyleResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+}
+async function runImportOB(mode){
+  $('obResult').innerHTML='<span class="spin"></span> 导入中...';
+  try{
+    const d=await api('/admin/import_ob?mode='+mode,{method:'POST'});
+    $('obResult').innerHTML='<span class="tag green">完成</span> '+esc(JSON.stringify(d));
+  }catch(e){$('obResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+}
+
+// xray
+async function loadXray(){
+  try{
+    const d=await api('/debug/xray');
+    const items=d.recent||[];
+    if(!items.length){$('xrayView').innerHTML='<div class="muted">暂无记录</div>';return}
+    $('xrayView').innerHTML=items.reverse().map(r=>`<div class="xray-item"><div class="ts">${r.ts||''} · ${r.model||''} · ${r.stream?'stream':'non-stream'}</div><div class="mono">${esc(JSON.stringify({n:0,msgs:r.n_messages,chars:r.total_message_chars,reasoning:r.reasoning_messages+'/'+r.reasoning_chars+'c',tools:r.tools_count+'/'+r.tools_chars+'c',injected:r.injected_block_chars!=null?(r.injected_block_chars+'c'):'-',messages:r.messages?.map(m=>({role:m.role,chars:m.chars}))},null,0))}</div></div>`).join('');
+  }catch(e){$('xrayView').innerHTML='<div class="muted" style="color:var(--red)">'+e.message+'</div>'}
+}
+
+// chat
+let chatMsgs=[];
+function renderChat(){$('chatLog').innerHTML=chatMsgs.map(m=>`<div class="chat-msg ${m.role}"><div class="role">${m.role}</div><div class="content">${esc(m.content)}</div></div>`).join('');$('chatLog').scrollTop=$('chatLog').scrollHeight}
+function clearChat(){chatMsgs=[];renderChat()}
+async function sendChat(){
+  const text=$('chatInput').value.trim();if(!text)return;
+  $('chatInput').value='';chatMsgs.push({role:'user',content:text});
+  const ai={role:'assistant',content:''};chatMsgs.push(ai);renderChat();
+  try{
+    const r=await fetch(base()+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+ckey()},body:JSON.stringify({messages:chatMsgs.slice(0,-1),stream:true})});
+    if(!r.ok)throw new Error(await r.text());
+    const reader=r.body.getReader(),dec=new TextDecoder();let buf='';
+    while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});let cut;while((cut=buf.indexOf('\n\n'))>=0){const ev=buf.slice(0,cut);buf=buf.slice(cut+2);for(const line of ev.split('\n')){if(!line.startsWith('data:'))continue;const data=line.slice(5).trim();if(!data||data==='[DONE]')continue;try{const j=JSON.parse(data);const delta=j.choices?.[0]?.delta;const c=delta?.content||delta?.reasoning_content||'';if(c){ai.content+=c;renderChat()}}catch{}}}}
+  }catch(e){ai.content+='[错误] '+e.message;renderChat()}
+}
+$('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
+
+// init
+function init(){
+  loadSettings();
+  if(akey()){loadStatus();}
+  else{openSettings();}
+}
+window.addEventListener('DOMContentLoaded',init);
+</script>
+</body>
+</html>

@@ -142,11 +142,13 @@ async def rough_from_raw(date_str: str, rows: list) -> str:
 
 
 async def rough_from_summary(date_str: str, daily_text: str) -> str:
-    """把已有的详细每日概括压缩成粗略归档（更省输入）。"""
+    """把已有的详细每日概括压缩成粗略归档（更省输入）。
+    bugfix：max_tokens 从 1200 提到 ROUGH_MAX_TOKENS（默认 8000）——
+    flash 推理烧 token 是常态，1200 会被推理烧光导致空正文抛错，正好触发归档失败。"""
     prompt = prompts.ROUGH_FROM_SUMMARY.format(date=date_str, daily=daily_text, user_label=config.USER_LABEL)
     return await _chat(
         [{"role": "user", "content": prompt}],
-        1200,
+        config.ROUGH_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
 

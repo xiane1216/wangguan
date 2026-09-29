@@ -125,8 +125,8 @@ async def get_recent_dailies(min_date_str: str, limit: int = 30) -> list:
 
 
 async def get_all_roughs(limit: int = 200) -> list:
-    """取全部粗略归档（kind=rough），按日期升序。"""
-    q = f"select=scope,content&kind=eq.rough&order=scope.asc&limit={max(1, min(limit, 400))}"
+    """取全部粗略归档（kind=rough），按日期升序。meta 用于 merged 标记。"""
+    q = f"select=scope,content,meta&kind=eq.rough&order=scope.asc&limit={max(1, min(limit, 400))}"
     return await _sb_get(config.MEMORY_TABLE, q)
 
 
