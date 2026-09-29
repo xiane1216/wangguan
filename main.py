@@ -238,8 +238,7 @@ async def chat_completions(request: Request):
         # 不 close 客户端：全局复用，留给下一个请求
 
     return StreamingResponse(relay(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
-                                      "Connection": "keep-alive"})
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ---- 管理接口 ----
