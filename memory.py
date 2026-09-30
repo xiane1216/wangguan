@@ -6,7 +6,7 @@
   三、季度概览 —— 最近 RECENT_QUARTERS 个季的概览
   四、年度概览 —— 最近 RECENT_YEARS 年的概览
   五、长期记忆 —— 旧数据兜底（OB 搬运 + 早期合并的概括）
-  六、上个窗口原始聊天记录 —— 最后 LAST_WINDOW_MESSAGES 条原文（零加工）
+  六、最近原始聊天记录 —— 全局最近 LAST_WINDOW_MESSAGES 条原文（零加工）
 
 防幻觉原则：
   - OB 搬运和原始记录是"原样复制"，不经过任何 LLM；
@@ -86,14 +86,15 @@ def _parse_walltime(value) -> "datetime | None":
             return None
 
 
-async def previous_window_rows(first_user_text: str) -> tuple[list, bool]:
-    """从 Supabase 最近的聊天记录里找到"上一个窗口"，取它的最后 N 条。
+async def recent_rows(limit: int | None = None) -> tuple[list, bool]:
+    """取全局最近 N 条原始聊天记录（零加工，跨窗口，不区分会话）。
 
-    返回 (rows, confident_no_history)：
-    - confident_no_history=True 表示库里除当前窗口外没有任何其他会话，
-      "没有上个窗口"是事实而非同步延迟（用于缓存完整判断，避免每10分钟空重建）。
+    返回 (rows, confident_empty)：
+    - rows 是最近 N 条，按时间升序（最新在最后）。
+    - confident_empty=True 表示库里确实没有任何聊天记录。
     """
-    rows = await store.fetch_recent_chats(limit=600)
+    n = limit or config.LAST_WINDOW_MESSAGES
+    rows = await store.fetch_recent_chats(limit=max(n * 4, 200))
     rows = [r for r in rows
             if r.get("role") in ("user", "assistant") and (r.get("content") or "").strip()]
     if not rows:
@@ -106,49 +107,7 @@ async def previous_window_rows(first_user_text: str) -> tuple[list, bool]:
             continue
         seen.add(k)
         dedup.append(r)
-    rows = dedup
-
-    # 用当前窗口的第一条用户消息，在最近同步的记录里定位"当前窗口"的会话。
-    now_wall = _now().replace(tzinfo=None)
-    max_age = timedelta(hours=config.CUR_WINDOW_MAX_AGE_HOURS)
-    cur_conv = None
-    probe = (first_user_text or "").strip()[:50]
-    if probe:
-        for r in reversed(rows):
-            if r.get("role") != "user":
-                continue
-            if not str(r.get("content") or "").strip().startswith(probe):
-                continue
-            wt = _parse_walltime(r.get("created_at"))
-            if wt is None or (now_wall - wt) > max_age:
-                continue  # 太老的匹配视为误匹配
-            cur_conv = r.get("conversation_id") or "__none__"
-            break
-
-    # 按会话分组（保持时间顺序）
-    order, convs = [], {}
-    for r in rows:
-        c = r.get("conversation_id") or "__none__"
-        if c not in convs:
-            convs[c] = []
-            order.append(c)
-        convs[c].append(r)
-
-    prev = None
-    if cur_conv is not None:
-        for c in reversed(order):  # 从最新往回找，第一个不是当前窗口的会话
-            if c != cur_conv:
-                prev = c
-                break
-        if prev is None:
-            return [], True  # 库里只有当前窗口自己：确认无历史
-    else:
-        if not order:
-            return [], True  # 库里没有任何会话：确认无历史
-        prev = order[-1] if order else None  # 当前窗口还没同步上去：最新会话就是上个窗口
-    if prev is None:
-        return [], True
-    return convs[prev][-config.LAST_WINDOW_MESSAGES:], False
+    return dedup[-n:], False
 
 
 def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows) -> str:
@@ -189,7 +148,7 @@ def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_r
         parts.append("=== 五、长期记忆（更早的历史兜底） ===\n" + longterm.strip())
     if last_rows:
         parts.append(
-            f"=== 六、上个窗口聊天记录（最后 {len(last_rows)} 条原文摘录） ===\n"
+            f"=== 六、最近聊天记录（最后 {len(last_rows)} 条原文） ===\n"
             + summarizer.transcript(last_rows)
         )
     if not parts:
@@ -202,8 +161,8 @@ def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_r
 
 
 async def _build_block(first_user_text: str) -> tuple[str, bool]:
-    """构建记忆块。返回 (block, complete)：complete 表示"没有第三段"是确定事实
-    （库里确实没有历史），而非同步延迟——用于冻结缓存判断。"""
+    """构建记忆块。返回 (block, complete)：complete 表示"没有更多可注入的历史"是确定事实
+    （库里确实没有历史记录），而非同步延迟——用于冻结缓存判断。"""
     if not config.supabase_ready():
         return "", True
     longterm = await store.get_longterm()
@@ -212,7 +171,7 @@ async def _build_block(first_user_text: str) -> tuple[str, bool]:
     monthlies = await store.get_memories("monthly", "", config.RECENT_MONTHS, desc=True)
     quarterlies = await store.get_memories("quarterly", "", config.RECENT_QUARTERS, desc=True)
     yearlies = await store.get_memories("yearly", "", config.RECENT_YEARS, desc=True)
-    last_rows, confident_no_history = await previous_window_rows(first_user_text)
+    last_rows, confident_no_history = await recent_rows()
     block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows)
     return block, (bool(block) or confident_no_history)
 
@@ -272,7 +231,7 @@ async def build_preview(first_user_hint: str = "") -> dict:
     monthlies = await store.get_memories("monthly", "", config.RECENT_MONTHS, desc=True)
     quarterlies = await store.get_memories("quarterly", "", config.RECENT_QUARTERS, desc=True)
     yearlies = await store.get_memories("yearly", "", config.RECENT_YEARS, desc=True)
-    last_rows, _no_history = await previous_window_rows(first_user)
+    last_rows, _no_history = await recent_rows()
     block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows)
     return {
         "first_user_matched": first_user[:50],
