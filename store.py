@@ -1,7 +1,7 @@
 """Supabase REST 读写。
 
 只读 chat_messages（聊天记录原文）；
-读写 gateway_memory（网关自己的记忆：longterm / daily / state）。
+读写 gateway_memory（网关自己的记忆：longterm / daily / rough / monthly / quarterly / yearly / state）。
 永远不碰 memory_summaries（那个日记总结表有幻觉，已弃用，网关从头到尾不读它）。
 """
 import json
@@ -127,6 +127,24 @@ async def get_recent_dailies(min_date_str: str, limit: int = 30) -> list:
 async def get_all_roughs(limit: int = 200) -> list:
     """取全部粗略归档（kind=rough），按日期升序。meta 用于 merged 标记。"""
     q = f"select=scope,content,meta&kind=eq.rough&order=scope.asc&limit={max(1, min(limit, 400))}"
+    return await _sb_get(config.MEMORY_TABLE, q)
+
+
+async def get_memory(kind: str, scope: str) -> dict | None:
+    """读取某个 kind+scope 的一行（用于判断某月/季/年是否已生成）。"""
+    rows = await _sb_get(config.MEMORY_TABLE, f"select=content,meta&kind=eq.{kind}&scope=eq.{scope}&limit=1")
+    return rows[0] if rows else None
+
+
+async def get_memories(kind: str, min_scope: str = "", limit: int = 50, desc: bool = True) -> list:
+    """按 kind 批量读取，可按 scope 过滤、排序、限量。
+
+    desc=True（默认）用于注入（取最近 N 条）；desc=False 用于滚动（按时间升序全量处理）。
+    """
+    q = f"select=scope,content,meta&kind=eq.{kind}"
+    if min_scope:
+        q += f"&scope=gte.{min_scope}"
+    q += f"&order=scope.{'desc' if desc else 'asc'}&limit={max(1, min(limit, 500))}"
     return await _sb_get(config.MEMORY_TABLE, q)
 
 
