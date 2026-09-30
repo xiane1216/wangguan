@@ -57,6 +57,11 @@ ROUGH_MAX_TOKENS = _int("ROUGH_MAX_TOKENS", 8000)          # 粗略归档 max_to
 NEW_WINDOW_REDETECT_SECONDS = _float("NEW_WINDOW_REDETECT_SECONDS", 300)  # 缓存命中但 0 条 assistant 回复且超过此秒数 → 视为同开场白新窗，强制重建
 CUR_WINDOW_MAX_AGE_HOURS = _float("CUR_WINDOW_MAX_AGE_HOURS", 6.0)        # 定位"当前窗口"时只看最近 N 小时的 user 消息（防陈年问候语误匹配）
 
+# ---- 窗口内滚动压缩（治"越聊越卡"） ----
+ROLLING_TRIGGER = _int("ROLLING_TRIGGER", 40)          # user/assistant 消息超过多少条开始压缩（0=关闭滚动压缩）
+ROLLING_KEEP = _int("ROLLING_KEEP", 20)                # 压缩后保留最近多少条原文
+ROLLUP_MAX_TOKENS = _int("ROLLUP_MAX_TOKENS", 3000)    # 单次滚动摘要输出上限
+
 
 def supabase_ready() -> bool:
     return bool(SUPABASE_URL and SUPABASE_KEY)
