@@ -95,6 +95,18 @@ def _clip(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + "…(过长已截断)"
 
 
+def _hard_cap(text: str, max_chars: int) -> str:
+    """硬截断：最终字数绝不超过 max_chars（在段落边界截，尽量不砍半句）。"""
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    # 尽量回退到最近的换行，避免把一句话砍成两半
+    idx = cut.rfind("\n")
+    if idx > max_chars * 0.6:
+        cut = cut[:idx]
+    return cut
+
+
 def transcript(rows: list, max_messages: int = 400, clip: int = 2000) -> str:
     """把聊天记录转成「[时间] 角色: 内容」纯文本（原文摘录用，零加工）。
 
@@ -127,11 +139,13 @@ async def summarize_day(date_str: str, rows: list) -> str:
         max_chars=config.DAILY_MAX_CHARS,
         transcript=text,
     )
-    return await _chat(
+    summary = await _chat(
         [{"role": "user", "content": prompt}],
         config.DAILY_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
+    # 硬截断：无论模型写多长，最终字数绝不超过 DAILY_MAX_CHARS
+    return _hard_cap(summary, config.DAILY_MAX_CHARS)
 
 
 async def rough_from_raw(date_str: str, rows: list) -> str:
@@ -175,11 +189,12 @@ async def summarize_month(month_scope: str, texts: list) -> str:
         max_chars=config.MONTHLY_MAX_CHARS,
         transcript=joined,
     )
-    return await _chat(
+    result = await _chat(
         [{"role": "user", "content": prompt}],
         config.MONTHLY_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
+    return _hard_cap(result, config.MONTHLY_MAX_CHARS)
 
 
 async def summarize_quarter(quarter_scope: str, texts: list) -> str:
@@ -193,11 +208,12 @@ async def summarize_quarter(quarter_scope: str, texts: list) -> str:
         max_chars=config.QUARTERLY_MAX_CHARS,
         transcript=joined,
     )
-    return await _chat(
+    result = await _chat(
         [{"role": "user", "content": prompt}],
         config.QUARTERLY_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
+    return _hard_cap(result, config.QUARTERLY_MAX_CHARS)
 
 
 async def summarize_year(year_scope: str, texts: list) -> str:
@@ -211,11 +227,12 @@ async def summarize_year(year_scope: str, texts: list) -> str:
         max_chars=config.YEARLY_MAX_CHARS,
         transcript=joined,
     )
-    return await _chat(
+    result = await _chat(
         [{"role": "user", "content": prompt}],
         config.YEARLY_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
+    return _hard_cap(result, config.YEARLY_MAX_CHARS)
 
 
 async def restyle_longterm(text: str) -> str:
