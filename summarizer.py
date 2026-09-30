@@ -122,7 +122,7 @@ async def summarize_day(date_str: str, rows: list) -> str:
     )
     return await _chat(
         [{"role": "user", "content": prompt}],
-        config.SUMMARY_MAX_TOKENS,
+        config.DAILY_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
 
