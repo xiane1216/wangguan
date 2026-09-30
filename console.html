@@ -170,12 +170,24 @@ dialog h3{font-size:18px;margin-bottom:16px}
   <!-- 记忆 -->
   <div class="panel" id="p-memory">
     <div class="card">
-      <h2>长期记忆 <span class="badge" id="ltBadge">—</span></h2>
-      <pre class="mono" id="ltView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
+      <h2>📅 近期每日（日） <span class="badge" id="dailyBadge">—</span></h2>
+      <div id="dailiesView" class="muted">尚未加载</div>
     </div>
     <div class="card">
-      <h2>近期每日概括</h2>
-      <div id="dailiesView" class="muted">尚未加载</div>
+      <h2>🗓 月度概览（月） <span class="badge" id="monthlyBadge">—</span></h2>
+      <div id="monthliesView" class="muted">尚未加载</div>
+    </div>
+    <div class="card">
+      <h2>🍂 季度概览（季） <span class="badge" id="quarterlyBadge">—</span></h2>
+      <div id="quarterliesView" class="muted">尚未加载</div>
+    </div>
+    <div class="card">
+      <h2>🏮 年度概览（年） <span class="badge" id="yearlyBadge">—</span></h2>
+      <div id="yearliesView" class="muted">尚未加载</div>
+    </div>
+    <div class="card">
+      <h2>📚 长期记忆（历史兜底） <span class="badge" id="ltBadge">—</span></h2>
+      <pre class="mono" id="ltView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
     </div>
     <div class="row" style="margin-bottom:14px">
       <button class="btn sm" onclick="loadMemory()">刷新记忆</button>
@@ -199,7 +211,7 @@ dialog h3{font-size:18px;margin-bottom:16px}
   <div class="panel" id="p-tools">
     <div class="card">
       <h2>记忆刷新 <span class="badge">手动</span></h2>
-      <p class="muted" style="margin-bottom:10px">把原始聊天记录总结成每日概括 + 合并长期记忆。建议每天聊完后点一次。会调用 DeepSeek API，稍等片刻。</p>
+      <p class="muted" style="margin-bottom:10px">把原始聊天记录总结成每日概括 + 分层归档（日/月/季/年）。建议每天聊完后点一次。会调用 DeepSeek API，稍等片刻。</p>
       <div class="field"><label>强制重新总结最近 N 天（0 = 只补缺失的）</label><input id="refreshDays" value="0" style="width:80px"></div>
       <button class="btn sm primary" onclick="runRefresh()">开始刷新</button>
       <div id="refreshResult" class="muted" style="margin-top:10px"></div>
@@ -225,7 +237,7 @@ dialog h3{font-size:18px;margin-bottom:16px}
   <div class="panel" id="p-xray">
     <div class="card">
       <h2>请求透视 <span class="badge">最近10条</span></h2>
-      <p class="muted" style="margin-bottom:10px">只记数字和构成，不含聊天内容。</p>
+      <p class="muted" style="margin-bottom:10px">只记数字和构成，不含聊天内容。滚动摘要的窗口缓存数见状态页。</p>
       <button class="btn sm" onclick="loadXray()">刷新</button>
     </div>
     <div id="xrayView"></div>
@@ -306,14 +318,21 @@ async function loadStatus(){
 }
 
 // memory
+function renderMemoryList(viewId,badgeId,items,scopeKey){
+  const view=$(viewId),badge=$(badgeId);
+  if(!items||!items.length){view.innerHTML='<span class="muted">暂无</span>';badge.textContent='0 条';return}
+  badge.textContent=items.length+' 条';
+  view.innerHTML=items.map(it=>`<div class="card" style="margin-bottom:8px;padding:14px"><div class="row" style="margin-bottom:6px"><span class="tag">${esc(it[scopeKey]||'')}</span><span class="muted">${(it.content||'').length} 字</span></div><pre class="mono" style="max-height:200px;overflow:auto">${esc(it.content||'')}</pre></div>`).join('');
+}
 async function loadMemory(){
   try{
     const d=await api('/admin/memory');
     $('ltBadge').textContent=(d.longterm_chars||0)+' 字';
     $('ltView').textContent=d.longterm||'(空)';
-    if(d.recent_daily&&d.recent_daily.length){
-      $('dailiesView').innerHTML=d.recent_daily.map(dd=>`<div class="card" style="margin-bottom:8px;padding:14px"><div class="row" style="margin-bottom:6px"><span class="tag">${dd.date}</span><span class="muted">${dd.content?.length||0} 字</span></div><pre class="mono" style="max-height:200px;overflow:auto">${esc(dd.content||'')}</pre></div>`).join('');
-    }else{$('dailiesView').innerHTML='<span class="muted">无近期概括</span>'}
+    renderMemoryList('dailiesView','dailyBadge',d.recent_daily,'date');
+    renderMemoryList('monthliesView','monthlyBadge',d.monthlies,'scope');
+    renderMemoryList('quarterliesView','quarterlyBadge',d.quarterlies,'scope');
+    renderMemoryList('yearliesView','yearlyBadge',d.yearlies,'scope');
   }catch(e){$('ltView').textContent='加载失败: '+e.message}
 }
 
