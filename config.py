@@ -63,7 +63,8 @@ ROLLING_KEEP = _int("ROLLING_KEEP", 20)                # 压缩后保留最近�
 ROLLUP_MAX_TOKENS = _int("ROLLUP_MAX_TOKENS", 3000)    # 单次滚动摘要输出上限
 
 # ---- 记忆分层字数上限 ----
-DAILY_MAX_CHARS = _int("DAILY_MAX_CHARS", 1000)        # 每日概括字数上限
+DAILY_MAX_CHARS = _int("DAILY_MAX_CHARS", 1000)        # 每日概括字数上限（软约束，写进提示词）
+DAILY_MAX_TOKENS = _int("DAILY_MAX_TOKENS", 2000)      # 每日概括输出 token 上限（硬约束，防模型无视字数软约束写太长）
 
 
 def supabase_ready() -> bool:
