@@ -3,10 +3,13 @@
 模型：deepseek-flash（DeepSeek-V4.1-Flash 的官方 API 名）。
 所有总结都带防幻觉铁律：只概括真实聊过、原文明确出现的内容，禁止编造。
 
-两级总结：
+记忆分层：
 - 详细每日（最近3天用）：summarize_day
 - 粗略归档（老日子用，一天一两句话）：rough_from_raw / rough_from_summary
-- 长期记忆合并（大概级别）：merge_longterm
+- 月度概览：summarize_month
+- 季度概览：summarize_quarter
+- 年度概览：summarize_year
+- 长期记忆合并（旧逻辑兜底）：merge_longterm
 - 窗口内滚动摘要（治越聊越卡）：summarize_rollup
 """
 import asyncio
@@ -153,6 +156,60 @@ async def rough_from_summary(date_str: str, daily_text: str) -> str:
     return await _chat(
         [{"role": "user", "content": prompt}],
         config.ROUGH_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
+async def summarize_month(month_scope: str, texts: list) -> str:
+    """把某月的每日/粗略记录压成月度概览。"""
+    joined = "\n".join(t for t in texts if (t or "").strip())
+    if not joined.strip():
+        return ""
+    prompt = prompts.MONTHLY_SUMMARY.format(
+        user_label=config.USER_LABEL,
+        scope=month_scope,
+        max_chars=config.MONTHLY_MAX_CHARS,
+        transcript=joined,
+    )
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        config.MONTHLY_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
+async def summarize_quarter(quarter_scope: str, texts: list) -> str:
+    """把某季的月度概览压成季度概览。"""
+    joined = "\n".join(t for t in texts if (t or "").strip())
+    if not joined.strip():
+        return ""
+    prompt = prompts.QUARTERLY_SUMMARY.format(
+        user_label=config.USER_LABEL,
+        scope=quarter_scope,
+        max_chars=config.QUARTERLY_MAX_CHARS,
+        transcript=joined,
+    )
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        config.QUARTERLY_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
+async def summarize_year(year_scope: str, texts: list) -> str:
+    """把某年的季度概览压成年度概览。"""
+    joined = "\n".join(t for t in texts if (t or "").strip())
+    if not joined.strip():
+        return ""
+    prompt = prompts.YEARLY_SUMMARY.format(
+        user_label=config.USER_LABEL,
+        scope=year_scope,
+        max_chars=config.YEARLY_MAX_CHARS,
+        transcript=joined,
+    )
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        config.YEARLY_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
 
