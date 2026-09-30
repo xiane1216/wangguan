@@ -62,6 +62,9 @@ ROLLING_TRIGGER = _int("ROLLING_TRIGGER", 40)          # user/assistant 消息�
 ROLLING_KEEP = _int("ROLLING_KEEP", 20)                # 压缩后保留最近多少条原文
 ROLLUP_MAX_TOKENS = _int("ROLLUP_MAX_TOKENS", 3000)    # 单次滚动摘要输出上限
 
+# ---- 记忆分层字数上限 ----
+DAILY_MAX_CHARS = _int("DAILY_MAX_CHARS", 1000)        # 每日概括字数上限
+
 
 def supabase_ready() -> bool:
     return bool(SUPABASE_URL and SUPABASE_KEY)
