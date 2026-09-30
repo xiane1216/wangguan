@@ -7,6 +7,7 @@
 - 详细每日（最近3天用）：summarize_day
 - 粗略归档（老日子用，一天一两句话）：rough_from_raw / rough_from_summary
 - 长期记忆合并（大概级别）：merge_longterm
+- 窗口内滚动摘要（治越聊越卡）：summarize_rollup
 """
 import asyncio
 import logging
@@ -176,5 +177,22 @@ async def merge_longterm(existing: str, rough_texts: list) -> str:
     return await _chat(
         [{"role": "user", "content": prompt}],
         config.SUMMARY_MAX_TOKENS + 1500,  # 输出2000字(约1400token)的余量
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
+async def summarize_rollup(rows: list) -> str:
+    """把窗口内被裁掉的早期消息压成滚动摘要（第一人称，防幻觉）。"""
+    text = transcript(rows, max_messages=200, clip=800)
+    if not text.strip():
+        return ""
+    prompt = prompts.ROLLUP.format(
+        user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
+        transcript=text,
+    )
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        config.ROLLUP_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
