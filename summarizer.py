@@ -96,9 +96,13 @@ def _clip(s: str, n: int) -> str:
 
 
 def transcript(rows: list, max_messages: int = 400, clip: int = 2000) -> str:
-    """把聊天记录转成「[时间] 角色: 内容」纯文本（原文摘录用，零加工）。"""
+    """把聊天记录转成「[时间] 角色: 内容」纯文本（原文摘录用，零加工）。
+
+    注意：rows 按时间升序。日总结要覆盖全天，必须取"最近 max_messages 条"（rows[-max_messages:]），
+    不能取 rows[:max_messages]（那样会把最新的消息丢掉）。"""
+    picked = rows[-max_messages:] if len(rows) > max_messages else rows
     out = []
-    for r in rows[:max_messages]:
+    for r in picked:
         role = r.get("role")
         if role not in ("user", "assistant"):
             continue
@@ -111,9 +115,9 @@ def transcript(rows: list, max_messages: int = 400, clip: int = 2000) -> str:
 
 
 async def summarize_day(date_str: str, rows: list) -> str:
-    """详细每日概括（最近3天用）。"""
-    # 大日子输入瘦身：条数和单条长度都收着，防推理把max_tokens烧光
-    text = transcript(rows, max_messages=300, clip=1500)
+    """详细每日概括（最近3天用）。覆盖全天，别漏掉最晚时段。"""
+    # 取最近 1000 条（覆盖全天），每条 clip 1000 字瘦身，防输入过长 + 防漏掉晚上
+    text = transcript(rows, max_messages=1000, clip=1000)
     if not text.strip():
         return ""
     prompt = prompts.DAILY_SUMMARY.format(
