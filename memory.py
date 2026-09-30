@@ -1,13 +1,16 @@
 """记忆装配核心。
 
 三段式记忆（开窗注入，窗口生命周期内冻结，保证 DeepSeek 前缀缓存稳定）：
-  一、长期记忆 —— OB 搬运来的原文 + 网关自己从聊天记录总结并逐段合并的概括
-  二、近期记忆 —— 最近 RECENT_DAYS 天的每日概括
-  三、上个窗口原始聊天记录 —— 最后 LAST_WINDOW_MESSAGES 条原文（零加工）
+  一、近期每日 —— 最近 RECENT_DAYS 天的详细概括
+  二、月度概览 —— 最近 RECENT_MONTHS 个月的概览
+  三、季度概览 —— 最近 RECENT_QUARTERS 个季的概览
+  四、年度概览 —— 最近 RECENT_YEARS 年的概览
+  五、长期记忆 —— 旧数据兜底（OB 搬运 + 早期合并的概括）
+  六、上个窗口原始聊天记录 —— 最后 LAST_WINDOW_MESSAGES 条原文（零加工）
 
 防幻觉原则：
   - OB 搬运和原始记录是"原样复制"，不经过任何 LLM；
-  - 每日概括和长期记忆合并用 deepseek-flash + 防幻觉铁律 prompt。
+  - 各级概括用 deepseek-flash + 防幻觉铁律 prompt，且每层有字数/ token 上限。
 """
 import asyncio
 import hashlib
@@ -106,8 +109,6 @@ async def previous_window_rows(first_user_text: str) -> tuple[list, bool]:
     rows = dedup
 
     # 用当前窗口的第一条用户消息，在最近同步的记录里定位"当前窗口"的会话。
-    # bugfix（Bug 3）：只考虑最近 CUR_WINDOW_MAX_AGE_HOURS 内的 user 消息，
-    # 防止陈年问候语（"在吗"/"早"）误匹配到几天前的旧会话。
     now_wall = _now().replace(tzinfo=None)
     max_age = timedelta(hours=config.CUR_WINDOW_MAX_AGE_HOURS)
     cur_conv = None
@@ -150,10 +151,8 @@ async def previous_window_rows(first_user_text: str) -> tuple[list, bool]:
     return convs[prev][-config.LAST_WINDOW_MESSAGES:], False
 
 
-def build_block_text(longterm, dailies, last_rows) -> str:
+def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows) -> str:
     parts = []
-    if (longterm or "").strip():
-        parts.append("=== 一、长期记忆（我们的记忆库：真实发生过的事的概括） ===\n" + longterm.strip())
     if dailies:
         seg = []
         for d in dailies:
@@ -161,10 +160,36 @@ def build_block_text(longterm, dailies, last_rows) -> str:
             if c:
                 seg.append(f"〔{d.get('scope', '')}〕\n{c}")
         if seg:
-            parts.append("=== 二、近期记忆（最近几天真实聊过的事） ===\n" + "\n\n".join(reversed(seg)))
+            parts.append("=== 一、近期每日记忆（最近几天，最详细） ===\n" + "\n\n".join(reversed(seg)))
+    if monthlies:
+        seg = []
+        for m in monthlies:
+            c = (m.get("content") or "").strip()
+            if c:
+                seg.append(f"〔{m.get('scope', '')}〕\n{c}")
+        if seg:
+            parts.append("=== 二、月度概览（最近几个月） ===\n" + "\n\n".join(reversed(seg)))
+    if quarterlies:
+        seg = []
+        for q in quarterlies:
+            c = (q.get("content") or "").strip()
+            if c:
+                seg.append(f"〔{q.get('scope', '')}〕\n{c}")
+        if seg:
+            parts.append("=== 三、季度概览 ===\n" + "\n\n".join(reversed(seg)))
+    if yearlies:
+        seg = []
+        for y in yearlies:
+            c = (y.get("content") or "").strip()
+            if c:
+                seg.append(f"〔{y.get('scope', '')}〕\n{c}")
+        if seg:
+            parts.append("=== 四、年度概览 ===\n" + "\n\n".join(reversed(seg)))
+    if (longterm or "").strip():
+        parts.append("=== 五、长期记忆（更早的历史兜底） ===\n" + longterm.strip())
     if last_rows:
         parts.append(
-            f"=== 三、上个窗口聊天记录（最后 {len(last_rows)} 条原文摘录） ===\n"
+            f"=== 六、上个窗口聊天记录（最后 {len(last_rows)} 条原文摘录） ===\n"
             + summarizer.transcript(last_rows)
         )
     if not parts:
@@ -184,8 +209,11 @@ async def _build_block(first_user_text: str) -> tuple[str, bool]:
     longterm = await store.get_longterm()
     min_day = (_now() - timedelta(days=config.RECENT_DAYS - 1)).strftime("%Y-%m-%d")
     dailies = await store.get_recent_dailies(min_day)
+    monthlies = await store.get_memories("monthly", "", config.RECENT_MONTHS, desc=True)
+    quarterlies = await store.get_memories("quarterly", "", config.RECENT_QUARTERS, desc=True)
+    yearlies = await store.get_memories("yearly", "", config.RECENT_YEARS, desc=True)
     last_rows, confident_no_history = await previous_window_rows(first_user_text)
-    block = build_block_text(longterm, dailies, last_rows)
+    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows)
     return block, (bool(block) or confident_no_history)
 
 
@@ -222,8 +250,6 @@ async def get_window_block(system_text: str, first_user_text: str, assistant_cou
     _windows[key] = {"block": block or None, "ts": now, "complete": bool(complete)}
     if len(_windows) > 200:
         # bugfix（Bug 4）：按最近使用时间驱逐（LRU），而不是 FIFO。
-        # 原来的 next(iter()) 按插入顺序驱逐，活跃窗口续期只改 ts 不改位置，
-        # 最早插入但一直活跃的窗口会最先被驱逐，破坏"窗口内冻结"承诺。
         oldest_key = min(_windows, key=lambda k: _windows[k]["ts"])
         _windows.pop(oldest_key)
     return block or None, key
@@ -243,12 +269,18 @@ async def build_preview(first_user_hint: str = "") -> dict:
     longterm = await store.get_longterm()
     min_day = (_now() - timedelta(days=config.RECENT_DAYS - 1)).strftime("%Y-%m-%d")
     dailies = await store.get_recent_dailies(min_day)
+    monthlies = await store.get_memories("monthly", "", config.RECENT_MONTHS, desc=True)
+    quarterlies = await store.get_memories("quarterly", "", config.RECENT_QUARTERS, desc=True)
+    yearlies = await store.get_memories("yearly", "", config.RECENT_YEARS, desc=True)
     last_rows, _no_history = await previous_window_rows(first_user)
-    block = build_block_text(longterm, dailies, last_rows)
+    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows)
     return {
         "first_user_matched": first_user[:50],
         "longterm_chars": len((longterm or "").strip()),
         "recent_days": [{"date": d.get("scope"), "chars": len(d.get("content") or "")} for d in dailies],
+        "monthlies": [{"scope": m.get("scope"), "chars": len(m.get("content") or "")} for m in monthlies],
+        "quarterlies": [{"scope": q.get("scope"), "chars": len(q.get("content") or "")} for q in quarterlies],
+        "yearlies": [{"scope": y.get("scope"), "chars": len(y.get("content") or "")} for y in yearlies],
         "last_window_messages": len(last_rows),
         "block": block,
     }
@@ -304,11 +336,12 @@ _MAX_ARCHIVE_PER_CYCLE = 40         # 每轮最多归档多少个老日子
 
 
 async def refresh_once(force_days: int = 0) -> dict:
-    """定时刷新（按用户要求的两级记忆结构）：
+    """定时刷新（按用户要求的分层记忆结构）：
 
     1. 详细每日概括 —— 只做最近 RECENT_DAYS 天（给"近期记忆"用）
     2. 粗略归档 —— 老于 RECENT_DAYS 的日子，一天压成一两句话
-    3. 长期记忆 —— 粗略归档合并成的"这个月大概"（800 字内），合并完清掉粗归档
+    3. 长期记忆 —— 粗略归档合并成的"这个月大概"（旧逻辑兜底）
+    4. 分层滚动 —— 日 → 月 → 季 → 年，逐层向上汇总
     """
     if _refresh_lock.locked():
         return {"skipped": "上一轮刷新还在跑，本轮跳过"}
@@ -373,12 +406,6 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
         log.info("已生成 %s 的详细概括（%d 条消息）", day, len(day_rows))
 
     # 2) 粗略归档：老于 RECENT_DAYS 且还没有 rough 行的日子，一天压成一两句话。
-    # bugfix（Bug 1）：消化判断从"absorbed_until 推进"改为"该天 rough 行是否存在"。
-    # 原逻辑：归档 9/20、9/21、9/22 时 9/20 失败，9/21、9/22 成功会把 absorbed_until
-    # 推到 9/22 → 9/20 被 d > absorbed_until 永久排除，随后 daily 清理又删掉它的
-    # 每日概括 → 这一天的两级记忆彻底蒸发。现在：失败的天没有 rough 行，
-    # 下一轮自动重试；成功的天有 rough 行，永不重做。原始记录 chat_messages
-    # 网关从不删除，所以重试永远有原料。
     if not stats.get("aborted"):
         try:
             rough_rows_all = await store.get_all_roughs(limit=400)
@@ -414,10 +441,7 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             await store.set_memory("state", "absorbed_until", str(day), {})
             stats["days_archived"].append(str(day))
 
-    # 3) 长期记忆：把"还没合并过"的粗略归档合并成"这个月的大概"。
-    # bugfix（配合 Bug 1）：不再 delete_roughs()，改为逐行标记 meta.merged=1。
-    # rough 行是"该天已归档"的唯一凭证，删掉会导致已归档日子被重复归档并
-    # 重复合并进长期记忆；merged 标记保证 merge 只处理新增的 rough。
+    # 3) 长期记忆：把"还没合并过"的粗略归档合并成"这个月的大概"（旧逻辑兜底）。
     if not stats.get("aborted"):
         try:
             rough_rows = await store.get_all_roughs(limit=400)
@@ -448,7 +472,14 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
                         log.exception("标记 rough merged 失败 scope=%s", r.get("scope"))
                 log.info("长期记忆已合并（%d 条未合并粗略归档，标记 %d 条）", len(roughs), marked)
 
-    # 4) 清理：滑出近期窗口的每日概括是死数据（内容已并入长期记忆），删掉防止表越积越大
+    # 4) 分层滚动（日→月→季→年）：在粗略归档生成之后向上汇总
+    if not stats.get("aborted"):
+        try:
+            stats.update(await _rollup_layers(today))
+        except Exception:
+            log.exception("分层滚动失败")
+
+    # 5) 清理：滑出近期窗口的每日概括是死数据（内容已并入长期记忆），删掉防止表越积越大
     if not stats.get("aborted"):
         try:
             stats["stale_dailies_deleted"] = await store.delete_dailies_before(str(recent_from))
@@ -459,6 +490,105 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             log.exception("清理过期每日概括失败")
 
     return await _finish_refresh(stats)
+
+
+def _quarter_of(month_scope: str) -> str:
+    """'2026-09' -> '2026-Q3'"""
+    try:
+        y, m = month_scope.split("-")
+        q = (int(m) - 1) // 3 + 1
+        return f"{y}-Q{q}"
+    except Exception:
+        return month_scope
+
+
+async def _rollup_layers(today) -> dict:
+    """月/季/年分层滚动归档。只在对应周期结束后滚动，且每个 scope 只生成一次。"""
+    stats = {"months_rolled": [], "quarters_rolled": [], "years_rolled": []}
+    if not config.supabase_ready() or not config.deepseek_ready():
+        return stats
+
+    # 月度：把已结束的月的 rough 压成 monthly
+    try:
+        rough_rows = await store.get_memories("rough", "", 500, desc=False)
+        months = {}
+        for r in rough_rows:
+            scope = str(r.get("scope") or "")
+            m = scope[:7]
+            if len(m) == 7:
+                months.setdefault(m, []).append(r)
+        today_month = today.strftime("%Y-%m")
+        for m in sorted(months):
+            if m >= today_month:
+                continue
+            if await store.get_memory("monthly", m):
+                continue
+            texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}" for r in months[m]]
+            try:
+                monthly = await summarizer.summarize_month(m, texts)
+            except Exception:
+                log.exception("月度归档失败 %s", m)
+                continue
+            if monthly.strip():
+                await store.set_memory("monthly", m, monthly, {"source": "monthly_rollup"})
+                stats["months_rolled"].append(m)
+    except Exception:
+        log.exception("月度滚动失败")
+
+    # 季度：把已结束的季的 monthly 压成 quarterly
+    try:
+        monthly_rows = await store.get_memories("monthly", "", 200, desc=False)
+        quarters = {}
+        for r in monthly_rows:
+            m = str(r.get("scope") or "")
+            if len(m) == 7:
+                q = _quarter_of(m)
+                quarters.setdefault(q, []).append(r)
+        today_quarter = _quarter_of(today.strftime("%Y-%m"))
+        for q in sorted(quarters):
+            if q >= today_quarter:
+                continue
+            if await store.get_memory("quarterly", q):
+                continue
+            texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}" for r in quarters[q]]
+            try:
+                quarterly = await summarizer.summarize_quarter(q, texts)
+            except Exception:
+                log.exception("季度归档失败 %s", q)
+                continue
+            if quarterly.strip():
+                await store.set_memory("quarterly", q, quarterly, {"source": "quarterly_rollup"})
+                stats["quarters_rolled"].append(q)
+    except Exception:
+        log.exception("季度滚动失败")
+
+    # 年度：把已结束的年的 quarterly 压成 yearly
+    try:
+        quarterly_rows = await store.get_memories("quarterly", "", 100, desc=False)
+        years = {}
+        for r in quarterly_rows:
+            y = str(r.get("scope") or "")[:4]
+            if len(y) == 4:
+                years.setdefault(y, []).append(r)
+        today_year = str(today.year)
+        for y in sorted(years):
+            if y >= today_year:
+                continue
+            if await store.get_memory("yearly", y):
+                continue
+            texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}" for r in years[y]]
+            try:
+                yearly = await summarizer.summarize_year(y, texts)
+            except Exception:
+                log.exception("年度归档失败 %s", y)
+                continue
+            if yearly.strip():
+                await store.set_memory("yearly", y, yearly, {"source": "yearly_rollup"})
+                stats["years_rolled"].append(y)
+    except Exception:
+        log.exception("年度滚动失败")
+
+    return stats
 
 
 async def _finish_refresh(stats: dict) -> dict:
