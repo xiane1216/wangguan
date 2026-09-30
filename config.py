@@ -62,9 +62,20 @@ ROLLING_TRIGGER = _int("ROLLING_TRIGGER", 40)          # user/assistant 消息�
 ROLLING_KEEP = _int("ROLLING_KEEP", 20)                # 压缩后保留最近多少条原文
 ROLLUP_MAX_TOKENS = _int("ROLLUP_MAX_TOKENS", 3000)    # 单次滚动摘要输出上限
 
-# ---- 记忆分层字数上限 ----
+# ---- 记忆分层（日/月/季/年）字数与 token 上限 ----
 DAILY_MAX_CHARS = _int("DAILY_MAX_CHARS", 1000)        # 每日概括字数上限（软约束，写进提示词）
-DAILY_MAX_TOKENS = _int("DAILY_MAX_TOKENS", 2000)      # 每日概括输出 token 上限（硬约束，防模型无视字数软约束写太长）
+DAILY_MAX_TOKENS = _int("DAILY_MAX_TOKENS", 2000)      # 每日概括输出 token 上限（硬约束）
+MONTHLY_MAX_CHARS = _int("MONTHLY_MAX_CHARS", 2000)    # 每月概览字数上限
+MONTHLY_MAX_TOKENS = _int("MONTHLY_MAX_TOKENS", 3500)  # 每月概览输出 token 上限
+QUARTERLY_MAX_CHARS = _int("QUARTERLY_MAX_CHARS", 2500) # 每季概览字数上限
+QUARTERLY_MAX_TOKENS = _int("QUARTERLY_MAX_TOKENS", 4000) # 每季概览输出 token 上限
+YEARLY_MAX_CHARS = _int("YEARLY_MAX_CHARS", 3000)      # 每年概览字数上限
+YEARLY_MAX_TOKENS = _int("YEARLY_MAX_TOKENS", 5000)    # 每年概览输出 token 上限
+
+# ---- 分层注入条数（近细远粗，更早的留在库里不注入） ----
+RECENT_MONTHS = _int("RECENT_MONTHS", 2)               # 注入保留最近几个月概览
+RECENT_QUARTERS = _int("RECENT_QUARTERS", 1)           # 注入保留最近几个季概览
+RECENT_YEARS = _int("RECENT_YEARS", 1)                 # 注入保留最近几年概览
 
 
 def supabase_ready() -> bool:
