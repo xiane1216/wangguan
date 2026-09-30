@@ -51,6 +51,8 @@ async def _chat(messages: list, max_tokens: int, temperature: float) -> str:
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": False,
+        # 关闭思考模式：deepseek-flash 默认 high 强度推理，会把 max_tokens 烧光导致无正文
+        "thinking": {"type": "disabled"},
     }
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20, read=180, write=20, pool=20)) as client:
         for attempt in range(2):
