@@ -3,7 +3,7 @@
 工作方式：
 - App 里 DeepSeek 供应商只把 API 地址改成网关域名，其余一切照旧；
 - 网关把请求原样透传给 DeepSeek（流式、思考链 reasoning_content、工具调用，一个字节不改）；
-- 唯一的改动：检测到"新窗口"时把三段式记忆注入 system，且窗口期间冻结，
+- 唯一的改动：检测到"新窗口"时把分段式记忆注入 system，且窗口期间冻结，
   不破坏 DeepSeek 的前缀缓存。
 - 新增：窗口内滚动压缩——上下文太长时把老消息压成摘要，防止越聊越卡。
 """
@@ -136,7 +136,7 @@ async def index(_: Request):
             log.exception("状态页读取失败")
     return JSONResponse({
         "ok": True,
-        "说明": "记忆网关运行中。开窗自动注入：长期记忆 + 近期记忆 + 上个窗口原始聊天记录。",
+        "说明": "记忆网关运行中。开窗自动注入：近期每日 + 月/季/年概览 + 长期记忆 + 上个窗口原文。",
         "deepseek_configured": config.deepseek_ready(),
         "supabase_configured": supabase_on,
         "ob_configured": bool(config.OB_MCP_URL),
@@ -236,9 +236,6 @@ async def chat_completions(request: Request):
                     yield f"data: {json.dumps(err, ensure_ascii=False)}\n\ndata: [DONE]\n\n".encode("utf-8")
                     return
                 # 逐字节原样转发：流式、思考链、工具调用全部不动。
-                # 注意：不要改成 aiter_lines() 逐行转发——SSE 事件可能是多行的
-                # （event:/data:/空行），逐行+补换行会把一个事件拆成两个，
-                # 破坏事件边界。aiter_bytes() 原样转发才是正确做法。
                 async for chunk in resp.aiter_bytes():
                     yield chunk
         except Exception as exc:
@@ -259,6 +256,9 @@ async def admin_memory(request: Request):
     longterm = await store.get_longterm()
     min_day = (memory._now() - timedelta(days=config.RECENT_DAYS - 1)).strftime("%Y-%m-%d")
     dailies = await store.get_recent_dailies(min_day)
+    monthlies = await store.get_memories("monthly", "", 50, desc=True)
+    quarterlies = await store.get_memories("quarterly", "", 50, desc=True)
+    yearlies = await store.get_memories("yearly", "", 50, desc=True)
     latest = await store.get_recent_dailies("0000-00-00", limit=10)
     absorbed_until = await store.get_state("absorbed_until")
     last_refresh = await store.get_state("last_refresh")
@@ -268,6 +268,9 @@ async def admin_memory(request: Request):
         "last_errors": last_errors,
         "longterm_chars": len((longterm or "").strip()),
         "recent_daily": [{"date": d.get("scope"), "content": d.get("content")} for d in dailies],
+        "monthlies": [{"scope": m.get("scope"), "content": m.get("content")} for m in monthlies],
+        "quarterlies": [{"scope": q.get("scope"), "content": q.get("content")} for q in quarterlies],
+        "yearlies": [{"scope": y.get("scope"), "content": y.get("content")} for y in yearlies],
         "latest_daily": [{"date": d.get("scope"), "chars": len(d.get("content") or "")} for d in latest],
         "absorbed_until": absorbed_until,
         "last_refresh": last_refresh,
