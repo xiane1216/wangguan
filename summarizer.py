@@ -117,6 +117,7 @@ async def summarize_day(date_str: str, rows: list) -> str:
         user_label=config.USER_LABEL,
         ai_label=config.AI_LABEL,
         date=date_str,
+        max_chars=config.DAILY_MAX_CHARS,
         transcript=text,
     )
     return await _chat(
