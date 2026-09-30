@@ -5,6 +5,7 @@
 - 网关把请求原样透传给 DeepSeek（流式、思考链 reasoning_content、工具调用，一个字节不改）；
 - 唯一的改动：检测到"新窗口"时把三段式记忆注入 system，且窗口期间冻结，
   不破坏 DeepSeek 的前缀缓存。
+- 新增：窗口内滚动压缩——上下文太长时把老消息压成摘要，防止越聊越卡。
 """
 import asyncio
 import contextlib
@@ -24,6 +25,7 @@ from starlette.routing import Route
 import config
 import memory
 import ob_client
+import rolling
 import store
 import summarizer
 
@@ -201,6 +203,14 @@ async def chat_completions(request: Request):
                      wkey, len(block), info["assistant_count"])
     _xray.append(xrec)
     del _xray[:-10]
+
+    # 窗口内滚动压缩：上下文太长时压掉最老的一批，防止越聊越卡/超时断流
+    try:
+        payload["messages"] = await rolling.compress(
+            payload["messages"], info["system"], info["first_user"]
+        )
+    except Exception:
+        log.exception("滚动压缩失败（本次请求将原样转发）")
 
     want_stream = bool(payload.get("stream", False))
     target = f"{config.DEEPSEEK_BASE_URL}/chat/completions"
