@@ -3,94 +3,133 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>记忆网关 · Console</title>
+<title>我们的记忆小屋 🏡</title>
 <style>
 :root{
-  --bg:#0d0f14;--surface:#161922;--surface2:#1d2130;--border:#2a2f3e;
-  --text:#e2e5ec;--muted:#7a8094;--accent:#5b8cff;--accent2:#a78bfa;
-  --green:#34d399;--red:#f87171;--yellow:#fbbf24;
-  --radius:14px;--shadow:0 4px 24px rgba(0,0,0,.4);
-  font-family:'SF Pro Display',Inter,system-ui,-apple-system,sans-serif;
+  --bg:#fbf4ec;--bg2:#fffaf5;
+  --surface:#ffffff;--surface2:#fff4ec;--surface3:#fdeee2;
+  --border:#f4dccf;--border2:#efd3c3;
+  --text:#4a3b34;--text2:#6b574d;--muted:#bd9e8f;
+  --accent:#f08a7d;--accent-deep:#e8756b;--accent2:#f6b183;
+  --pink:#f7a8b8;--lav:#c9a7e8;
+  --green:#7fce9a;--red:#ef8f8f;--yellow:#eebd6e;
+  --radius:20px;--radius-sm:14px;
+  --shadow:0 6px 24px rgba(214,152,120,.14);
+  --shadow-lg:0 12px 40px rgba(214,152,120,.22);
+  font-family:'PingFang SC','Hiragino Sans GB',-apple-system,'Segoe UI',Roboto,sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
-a{color:var(--accent);text-decoration:none}
+body{
+  background:linear-gradient(160deg,var(--bg) 0%,var(--bg2) 40%,#fff1f0 100%);
+  color:var(--text);min-height:100vh;overflow-x:hidden;
+  background-attachment:fixed;
+}
+a{color:var(--accent-deep);text-decoration:none}
 
 /* layout */
-.shell{max-width:960px;margin:0 auto;padding:24px 20px}
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border);margin-bottom:8px;position:sticky;top:0;background:var(--bg);z-index:10}
-.brand{display:flex;align-items:center;gap:10px}
-.brand-dot{width:10px;height:10px;border-radius:50%;background:var(--muted);transition:.3s}
-.brand-dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
-.brand-name{font-weight:700;font-size:18px;letter-spacing:-.3px}
+.shell{max-width:920px;margin:0 auto;padding:26px 20px 60px}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 22px;margin-bottom:6px;
+  background:rgba(255,255,255,.75);backdrop-filter:blur(12px);
+  border:1px solid var(--border);border-radius:22px;box-shadow:var(--shadow);
+  position:sticky;top:12px;z-index:10;
+}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-emoji{font-size:26px;line-height:1}
+.brand-dot{width:11px;height:11px;border-radius:50%;background:var(--muted);transition:.35s;box-shadow:0 0 0 4px rgba(189,158,143,.12)}
+.brand-dot.on{background:var(--green);box-shadow:0 0 10px var(--green)}
+.brand-name{font-weight:700;font-size:18px;letter-spacing:.2px}
 .brand-sub{font-size:11px;color:var(--muted)}
-.nav{display:flex;gap:2px;margin:16px 0 24px;flex-wrap:wrap}
-.nav-btn{padding:9px 16px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;transition:.2s}
-.nav-btn:hover{color:var(--text);background:var(--surface)}
-.nav-btn.on{color:var(--accent);background:var(--surface);border-color:var(--border)}
-.panel{display:none;animation:fade .25s ease}
+.nav{display:flex;gap:8px;margin:20px 0 22px;flex-wrap:wrap}
+.nav-btn{
+  padding:10px 18px;border:1px solid transparent;border-radius:999px;
+  background:transparent;color:var(--muted);cursor:pointer;font-size:14px;font-weight:500;
+  transition:.22s;
+}
+.nav-btn:hover{color:var(--accent-deep);background:#fff;box-shadow:var(--shadow)}
+.nav-btn.on{
+  color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent2));
+  box-shadow:0 6px 16px rgba(240,138,125,.35);
+}
+.panel{display:none;animation:fade .28s ease}
 .panel.on{display:block}
-@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+@keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
 
 /* cards */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px}
-.card h2{font-size:15px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
-.card h2 .badge{font-size:11px;font-weight:500;color:var(--muted);background:var(--surface2);padding:2px 8px;border-radius:6px}
+.card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:20px;margin-bottom:16px;box-shadow:var(--shadow);
+}
+.card h2{font-size:15px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;color:var(--text)}
+.card h2 .badge{
+  font-size:11px;font-weight:600;color:var(--accent-deep);
+  background:var(--surface3);padding:3px 10px;border-radius:999px;
+}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .grow{flex:1}
 .muted{color:var(--muted);font-size:13px}
-.mono{font-family:'SF Mono',ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;line-height:1.6}
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
-.stat{background:var(--surface2);border-radius:10px;padding:12px 14px}
-.stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-.stat-value{font-size:20px;font-weight:700;margin-top:2px}
+.mono{font-family:'SF Mono',ui-monospace,Consolas,monospace;font-size:12.5px;white-space:pre-wrap;word-break:break-word;line-height:1.65;color:var(--text2)}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.stat{
+  background:linear-gradient(135deg,var(--surface2),#fff8f2);
+  border:1px solid var(--border2);border-radius:16px;padding:14px 16px;
+}
+.stat-label{font-size:11px;color:var(--muted);letter-spacing:.4px}
+.stat-value{font-size:21px;font-weight:800;margin-top:4px;color:var(--text)}
 
 /* form */
-.field{margin:10px 0}
-.field label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+.field{margin:11px 0}
+.field label{display:block;font-size:13px;color:var(--text2);margin-bottom:6px;font-weight:500}
 .field input,.field textarea,.field select{
-  width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;
-  background:var(--surface2);color:var(--text);font-size:14px;outline:none;transition:.2s
+  width:100%;padding:11px 14px;border:1.5px solid var(--border);border-radius:14px;
+  background:var(--bg2);color:var(--text);font-size:14px;outline:none;transition:.2s;
 }
-.field input:focus,.field textarea:focus{border-color:var(--accent)}
-.field textarea{min-height:120px;resize:vertical;font-family:'SF Mono',ui-monospace,Consolas,monospace;font-size:12px;line-height:1.5}
+.field input:focus,.field textarea:focus{border-color:var(--accent);background:#fff;box-shadow:0 0 0 4px rgba(240,138,125,.1)}
+.field textarea{min-height:120px;resize:vertical;font-family:'SF Mono',ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.5}
 
 /* buttons */
-.btn{padding:9px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);color:var(--text);cursor:pointer;font-size:14px;transition:.2s}
-.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn{
+  padding:10px 18px;border:1.5px solid var(--border);border-radius:999px;
+  background:#fff;color:var(--text2);cursor:pointer;font-size:14px;font-weight:600;transition:.2s;
+}
+.btn:hover{border-color:var(--accent);color:var(--accent-deep);box-shadow:var(--shadow)}
 .btn:active{transform:scale(.97)}
-.btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));border:0;color:#fff;font-weight:600}
-.btn.primary:hover{opacity:.9;color:#fff}
-.btn.sm{padding:6px 12px;font-size:12px}
-.tag{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--surface2);border:1px solid var(--border)}
-.tag.green{color:var(--green);border-color:rgba(52,211,153,.3)}
-.tag.red{color:var(--red);border-color:rgba(248,113,113,.3)}
+.btn.primary{
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border:0;color:#fff;font-weight:700;box-shadow:0 6px 16px rgba(240,138,125,.35);
+}
+.btn.primary:hover{opacity:.92;color:#fff;box-shadow:0 8px 20px rgba(240,138,125,.45)}
+.btn.sm{padding:7px 14px;font-size:13px}
+.tag{font-size:11px;padding:3px 10px;border-radius:999px;background:var(--surface3);border:1px solid var(--border2);color:var(--text2);font-weight:500}
+.tag.green{color:#4aa06e;border-color:rgba(127,206,154,.4);background:#eef9f1}
+.tag.red{color:#d96969;border-color:rgba(239,143,143,.4);background:#fdf0f0}
 
 /* chat */
-.chat-box{min-height:200px;max-height:42vh;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--surface2)}
-.chat-msg{padding:8px 0;border-bottom:1px solid var(--border)}
+.chat-box{min-height:200px;max-height:42vh;overflow-y:auto;border:1.5px solid var(--border);border-radius:16px;padding:16px;background:var(--bg2)}
+.chat-msg{padding:9px 0;border-bottom:1px dashed var(--border)}
 .chat-msg:last-child{border:0}
 .chat-msg .role{font-size:11px;color:var(--muted);margin-bottom:3px}
-.chat-msg .content{font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.chat-msg .content{font-size:14px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
 .chat-msg.user .content{color:var(--text)}
-.chat-msg.assistant .content{color:var(--accent)}
+.chat-msg.assistant .content{color:var(--accent-deep)}
 
 /* preview */
-.preview-box{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;max-height:500px;overflow-y:auto}
+.preview-box{background:var(--bg2);border:1.5px solid var(--border);border-radius:16px;padding:18px;max-height:500px;overflow-y:auto}
 
 /* dialog */
-dialog{border:0;border-radius:var(--radius);background:var(--surface);color:var(--text);padding:0;box-shadow:var(--shadow);max-width:480px;width:90vw}
-dialog::backdrop{background:rgba(0,0,0,.6);backdrop-filter:blur(4px)}
-dialog form{padding:24px}
+dialog{border:0;border-radius:24px;background:var(--surface);color:var(--text);padding:0;box-shadow:var(--shadow-lg);max-width:460px;width:90vw}
+dialog::backdrop{background:rgba(74,59,52,.35);backdrop-filter:blur(5px)}
+dialog form{padding:26px}
 dialog h3{font-size:18px;margin-bottom:16px}
 
 /* xray */
-.xray-item{background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:8px}
-.xray-item .ts{font-size:11px;color:var(--muted)}
+.xray-item{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:10px}
+.xray-item .ts{font-size:11px;color:var(--muted);margin-bottom:4px}
 
 /* responsive */
-@media(max-width:640px){.shell{padding:16px 12px}.stat-grid{grid-template-columns:1fr 1fr}.brand-sub{display:none}}
-.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@media(max-width:640px){.shell{padding:16px 12px 50px}.stat-grid{grid-template-columns:1fr 1fr}.brand-sub{display:none}.topbar{padding:14px 16px}}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:-2px}
 @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
@@ -98,28 +137,29 @@ dialog h3{font-size:18px;margin-bottom:16px}
 <div class="shell">
   <div class="topbar">
     <div class="brand">
-      <div class="brand-dot" id="dot"></div>
+      <div class="brand-emoji">🐾</div>
       <div>
-        <div class="brand-name">记忆网关</div>
+        <div class="brand-name">我们的记忆小屋</div>
         <div class="brand-sub" id="sub">未连接</div>
       </div>
+      <div class="brand-dot" id="dot"></div>
     </div>
-    <button class="btn sm" onclick="openSettings()">设置</button>
+    <button class="btn sm" onclick="openSettings()">⚙ 设置</button>
   </div>
 
   <nav class="nav" id="nav">
-    <button class="nav-btn on" data-p="status">状态</button>
-    <button class="nav-btn" data-p="memory">记忆</button>
-    <button class="nav-btn" data-p="preview">注入预览</button>
-    <button class="nav-btn" data-p="tools">工具</button>
-    <button class="nav-btn" data-p="xray">诊断</button>
-    <button class="nav-btn" data-p="chat">对话测试</button>
+    <button class="nav-btn on" data-p="status">🌸 状态</button>
+    <button class="nav-btn" data-p="memory">💭 记忆</button>
+    <button class="nav-btn" data-p="preview">📥 注入预览</button>
+    <button class="nav-btn" data-p="tools">🛠 工具</button>
+    <button class="nav-btn" data-p="xray">🔍 诊断</button>
+    <button class="nav-btn" data-p="chat">💬 对话测试</button>
   </nav>
 
   <!-- 状态 -->
   <div class="panel on" id="p-status">
     <div class="card">
-      <h2>运行状态</h2>
+      <h2>运行状态 <span class="badge">💖</span></h2>
       <div class="stat-grid" id="statGrid"><div class="muted">连接后显示</div></div>
       <div class="row" style="margin-top:14px">
         <button class="btn sm" onclick="loadStatus()">刷新</button>
@@ -131,7 +171,7 @@ dialog h3{font-size:18px;margin-bottom:16px}
   <div class="panel" id="p-memory">
     <div class="card">
       <h2>长期记忆 <span class="badge" id="ltBadge">—</span></h2>
-      <pre class="mono" id="ltView" style="max-height:300px;overflow:auto;background:var(--surface2);padding:14px;border-radius:10px">尚未加载</pre>
+      <pre class="mono" id="ltView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
     </div>
     <div class="card">
       <h2>近期每日概括</h2>
@@ -208,7 +248,7 @@ dialog h3{font-size:18px;margin-bottom:16px}
 
 <dialog id="settingsDlg">
   <form method="dialog">
-    <h3>连接设置</h3>
+    <h3>连接设置 🔑</h3>
     <div class="field"><label>Gateway URL</label><input id="gwUrl" placeholder="留空 = 当前域名"></div>
     <div class="field"><label>Admin Key</label><input id="gwKey" type="password" placeholder="ADMIN_SECRET"></div>
     <div class="field"><label>Gateway Key（对话测试用）</label><input id="gwChatKey" type="password" placeholder="GATEWAY_KEY"></div>
@@ -272,7 +312,7 @@ async function loadMemory(){
     $('ltBadge').textContent=(d.longterm_chars||0)+' 字';
     $('ltView').textContent=d.longterm||'(空)';
     if(d.recent_daily&&d.recent_daily.length){
-      $('dailiesView').innerHTML=d.recent_daily.map(dd=>`<div class="card" style="margin-bottom:8px;padding:12px"><div class="row" style="margin-bottom:6px"><span class="tag">${dd.date}</span><span class="muted">${dd.content?.length||0} 字</span></div><pre class="mono" style="max-height:200px;overflow:auto">${esc(dd.content||'')}</pre></div>`).join('');
+      $('dailiesView').innerHTML=d.recent_daily.map(dd=>`<div class="card" style="margin-bottom:8px;padding:14px"><div class="row" style="margin-bottom:6px"><span class="tag">${dd.date}</span><span class="muted">${dd.content?.length||0} 字</span></div><pre class="mono" style="max-height:200px;overflow:auto">${esc(dd.content||'')}</pre></div>`).join('');
     }else{$('dailiesView').innerHTML='<span class="muted">无近期概括</span>'}
   }catch(e){$('ltView').textContent='加载失败: '+e.message}
 }
@@ -317,7 +357,7 @@ async function loadXray(){
     const d=await api('/debug/xray');
     const items=d.recent||[];
     if(!items.length){$('xrayView').innerHTML='<div class="muted">暂无记录</div>';return}
-    $('xrayView').innerHTML=items.reverse().map(r=>`<div class="xray-item"><div class="ts">${r.ts||''} · ${r.model||''} · ${r.stream?'stream':'non-stream'}</div><div class="mono">${esc(JSON.stringify({n:0,msgs:r.n_messages,chars:r.total_message_chars,reasoning:r.reasoning_messages+'/'+r.reasoning_chars+'c',tools:r.tools_count+'/'+r.tools_chars+'c',injected:r.injected_block_chars!=null?(r.injected_block_chars+'c'):'-',messages:r.messages?.map(m=>({role:m.role,chars:m.chars}))},null,0))}</div></div>`).join('');
+    $('xrayView').innerHTML=items.reverse().map(r=>`<div class="xray-item"><div class="ts">${r.ts||''} · ${r.model||''} · ${r.stream?'stream':'non-stream'}</div><div class="mono">${esc(JSON.stringify({msgs:r.n_messages,chars:r.total_message_chars,reasoning:r.reasoning_messages+'/'+r.reasoning_chars+'c',tools:r.tools_count+'/'+r.tools_chars+'c',injected:r.injected_block_chars!=null?(r.injected_block_chars+'c'):'-',messages:r.messages?.map(m=>({role:m.role,chars:m.chars}))},null,0))}</div></div>`).join('');
   }catch(e){$('xrayView').innerHTML='<div class="muted" style="color:var(--red)">'+e.message+'</div>'}
 }
 
