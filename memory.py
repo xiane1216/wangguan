@@ -367,7 +367,7 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             continue
         fails = 0
         if not summary.strip():
-            stats["day_errors"][str(day)] = "模型返回空内容（推理烧光了max_tokens）"
+            stats["day_errors"][str(day)] = "当天没有可总结的聊天记录"
             continue
         await store.set_memory("daily", str(day), summary, {"messages": len(day_rows), "tz_fix": 1})
         stats["days_summarized"].append(str(day))
@@ -402,7 +402,7 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
                 continue
             fails = 0
             if not note.strip():
-                stats["day_errors"]["archive:" + str(day)] = "模型返回空内容（推理烧光了max_tokens）"
+                stats["day_errors"]["archive:" + str(day)] = "当天没有可归档的聊天记录"
                 continue
             await store.set_memory("rough", str(day), note, {"merged": 0})
             # absorbed_until 仅作展示/兼容保留，不再参与消化判断

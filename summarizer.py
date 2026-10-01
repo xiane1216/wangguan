@@ -57,8 +57,10 @@ async def _chat(messages: list, max_tokens: int, temperature: float, strict_full
         # 关闭思考模式：deepseek-flash 默认 high 强度推理，会把 max_tokens 烧光导致无正文
         "thinking": {"type": "disabled"},
     }
+    input_chars = sum(len(str(m.get("content") or "")) for m in messages)
+    data = {}
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20, read=180, write=20, pool=20)) as client:
-        for attempt in range(2):
+        for attempt in range(3):
             r = await client.post(
                 f"{config.DEEPSEEK_BASE_URL}/chat/completions",
                 headers={
@@ -67,33 +69,43 @@ async def _chat(messages: list, max_tokens: int, temperature: float, strict_full
                 },
                 json=payload,
             )
-            if r.status_code == 429 and attempt == 0:
-                await asyncio.sleep(30)  # 限流：等半分钟重试一次
+            if r.status_code == 429 and attempt < 2:
+                await asyncio.sleep(30)  # 限流：等半分钟重试
                 continue
-            break
-    if r.status_code >= 400:
-        raise RuntimeError(f"DeepSeek HTTP {r.status_code}: {r.text[:300]}")
-    data = r.json()
-    message = ((data.get("choices") or [{}])[0]).get("message") or {}
-    content = str(message.get("content") or "").strip()
-    if not content:
-        # 思考型模型可能把 max_tokens 全部烧在推理上导致正文为空。
-        # 铁律：reasoning_content 是思考过程，不是答案，绝不能存成记忆。
-        choice = (data.get("choices") or [{}])[0]
-        finish = choice.get("finish_reason")
-        usage = data.get("usage") or {}
-        rc = str(message.get("reasoning_content") or "")
-        raise RuntimeError(
-            f"模型没有产出正文 finish={finish} completion_tokens={usage.get('completion_tokens')} "
-            f"reasoning_chars={len(rc)}（推理烧光了max_tokens，需减小输入或加大上限）"
-        )
-    if strict_full:
-        finish = ((data.get("choices") or [{}])[0]).get("finish_reason") or ""
-        if finish == "length":
-            # 输出顶到 max_tokens 被截断——总结按时间顺序写，被砍的正是"晚上"，
-            # 绝不能当正常结果存库，必须让调用方重试。
-            raise RuntimeError(f"输出达到max_tokens上限被截断（completion_tokens={usage.get('completion_tokens')}）")
-    return _clean(content)
+            if r.status_code >= 400:
+                raise RuntimeError(f"DeepSeek HTTP {r.status_code}: {r.text[:300]}")
+            try:
+                data = r.json()
+            except Exception:
+                raise RuntimeError(f"DeepSeek 返回了无法解析的响应: {r.text[:200]}")
+            if data.get("error"):
+                # 上游故障时可能出现 200 + {"error": ...} 结构
+                raise RuntimeError(f"DeepSeek 返回错误: {str(data['error'])[:300]}")
+            message = ((data.get("choices") or [{}])[0]).get("message") or {}
+            content = str(message.get("content") or "").strip()
+            if content:
+                if strict_full:
+                    usage = data.get("usage") or {}
+                    finish = ((data.get("choices") or [{}])[0]).get("finish_reason") or ""
+                    if finish == "length":
+                        # 输出顶到 max_tokens 被截断——总结按时间顺序写，被砍的正是"晚上"，
+                        # 绝不能当正常结果存库，必须让调用方重试。
+                        raise RuntimeError(f"输出达到max_tokens上限被截断（completion_tokens={usage.get('completion_tokens')}）")
+                return _clean(content)
+            # 空壳响应：finish/usage/token 统计全没有——上游服务故障/过载的典型症状，稍等重试
+            log.warning("DeepSeek 返回空响应（第 %d/3 次，输入 %d 字）", attempt + 1, input_chars)
+            if attempt < 2:
+                await asyncio.sleep(5)
+    # 铁律：reasoning_content 是思考过程，不是答案，绝不能存成记忆——宁报错不硬存。
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    usage = data.get("usage") or {}
+    rc = str(message.get("reasoning_content") or "")
+    raise RuntimeError(
+        f"DeepSeek 连续3次返回空正文（finish={choice.get('finish_reason')} "
+        f"completion_tokens={usage.get('completion_tokens')} reasoning_chars={len(rc)} 输入{input_chars}字）"
+        f"——上游服务故障或过载，稍后重试即可。原始响应片段: {str(data)[:150]}"
+    )
 
 
 def _clip(s: str, n: int) -> str:
