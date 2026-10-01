@@ -188,7 +188,7 @@ async def chat_completions(request: Request):
     xrec = _xray_base(payload, messages)
     if info["first_user"]:
         try:
-            block, wkey = await memory.get_window_block(info["system"], info["first_user"], info["assistant_count"])
+            block, wkey = await memory.get_window_block(info["first_user"], info["assistant_count"])
             if block:
                 total_chars = sum(len(memory._text_of(x.get("content"))) for x in messages)
                 log.info("开窗注入：块 %d 字符；请求 %d 条消息 / %d 字符；窗口 %s",

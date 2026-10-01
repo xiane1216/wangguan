@@ -67,8 +67,17 @@ def analyze_messages(messages: list) -> dict:
     return {"system": system_text, "first_user": first_user, "assistant_count": assistant_count}
 
 
-def _window_key(system_text: str, first_user: str) -> str:
-    return hashlib.sha256(((system_text or "") + "\x00" + (first_user or "")).encode("utf-8")).hexdigest()[:16]
+def _window_key(first_user: str) -> str:
+    """窗口指纹只用第一条用户消息（对话锚点），不再掺 system 文本。
+
+    原因：App 的心跳和正常聊天共用同一段对话历史（first_user 相同），
+    但 system 提示词是两套（心跳版多一段规则）。之前 system 参与指纹，
+    心跳被当成独立窗口：心跳间隔一超过 TTL 就重拼记忆块 → system 内容
+    变化 → DeepSeek 前缀缓存整体作废，心跳请求命中率暴跌。记忆块内容
+    本来就是全局的（不区分对话），同一段历史共用一个冻结块即可。
+    "同开场白新窗"的误命中仍由 assistant_count==0 + REDETECT 兜底强制重建。
+    """
+    return hashlib.sha256((first_user or "").encode("utf-8")).hexdigest()[:16]
 
 
 def _parse_walltime(value) -> "datetime | None":
@@ -176,7 +185,7 @@ async def _build_block(first_user_text: str) -> tuple[str, bool]:
     return block, (bool(block) or confident_no_history)
 
 
-async def get_window_block(system_text: str, first_user_text: str, assistant_count: int = 0):
+async def get_window_block(first_user_text: str, assistant_count: int = 0):
     """返回 (block, window_key)。窗口生命周期内冻结：活跃窗口滑动续期，永不中途重建，
     保证前缀缓存稳定；空结果 10 分钟后允许重试。
 
@@ -185,7 +194,7 @@ async def get_window_block(system_text: str, first_user_text: str, assistant_cou
     窗口在几分钟内几乎必然产生过 assistant 回复），强制重建，避免把上上个
     窗口的内容当成"上个窗口"注入。
     """
-    key = _window_key(system_text, first_user_text)
+    key = _window_key(first_user_text)
     now = time.time()
     hit = _windows.get(key)
     if hit:
