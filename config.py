@@ -66,13 +66,18 @@ ROLLUP_MAX_TOKENS = _int("ROLLUP_MAX_TOKENS", 3000)    # 单次滚动摘要输�
 
 # ---- 记忆分层（日/月/季/年）字数与 token 上限 ----
 DAILY_MAX_CHARS = _int("DAILY_MAX_CHARS", 2500)        # 每日概括字数上限（软约束，写进提示词）
-DAILY_MAX_TOKENS = _int("DAILY_MAX_TOKENS", 4500)      # 每日概括输出 token 上限（硬约束，覆盖全天别被截断）
+DAILY_MAX_TOKENS = _int("DAILY_MAX_TOKENS", 8000)      # 每日概括输出 token 上限（思考已禁用=纯正文，给足余量；截断有重试兜底）
 MONTHLY_MAX_CHARS = _int("MONTHLY_MAX_CHARS", 2000)    # 每月概览字数上限
 MONTHLY_MAX_TOKENS = _int("MONTHLY_MAX_TOKENS", 3500)  # 每月概览输出 token 上限
 QUARTERLY_MAX_CHARS = _int("QUARTERLY_MAX_CHARS", 2500) # 每季概览字数上限
 QUARTERLY_MAX_TOKENS = _int("QUARTERLY_MAX_TOKENS", 4000) # 每季概览输出 token 上限
 YEARLY_MAX_CHARS = _int("YEARLY_MAX_CHARS", 3000)      # 每年概览字数上限
 YEARLY_MAX_TOKENS = _int("YEARLY_MAX_TOKENS", 5000)    # 每年概览输出 token 上限
+
+# ---- 全天覆盖（治"总结不完：丢晚上/丢上午"） ----
+DAILY_RAW_MESSAGES = _int("DAILY_RAW_MESSAGES", 1500)  # 每日总结直接读最近多少条原文；更早的先压成"较早时段要点"
+HEAD_MAX_CHARS = _int("HEAD_MAX_CHARS", 3000)          # "较早时段要点"字数上限
+HEAD_MAX_TOKENS = _int("HEAD_MAX_TOKENS", 3000)        # "较早时段要点"输出 token 上限
 
 # ---- 分层注入条数（近细远粗，更早的留在库里不注入） ----
 RECENT_MONTHS = _int("RECENT_MONTHS", 2)               # 注入保留最近几个月概览

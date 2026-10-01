@@ -45,7 +45,7 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
-async def _chat(messages: list, max_tokens: int, temperature: float) -> str:
+async def _chat(messages: list, max_tokens: int, temperature: float, strict_full: bool = False) -> str:
     if not config.deepseek_ready():
         raise RuntimeError("DEEPSEEK_API_KEY 未配置")
     payload = {
@@ -87,6 +87,12 @@ async def _chat(messages: list, max_tokens: int, temperature: float) -> str:
             f"模型没有产出正文 finish={finish} completion_tokens={usage.get('completion_tokens')} "
             f"reasoning_chars={len(rc)}（推理烧光了max_tokens，需减小输入或加大上限）"
         )
+    if strict_full:
+        finish = ((data.get("choices") or [{}])[0]).get("finish_reason") or ""
+        if finish == "length":
+            # 输出顶到 max_tokens 被截断——总结按时间顺序写，被砍的正是"晚上"，
+            # 绝不能当正常结果存库，必须让调用方重试。
+            raise RuntimeError(f"输出达到max_tokens上限被截断（completion_tokens={usage.get('completion_tokens')}）")
     return _clean(content)
 
 
@@ -126,31 +132,108 @@ def transcript(rows: list, max_messages: int = 400, clip: int = 2000) -> str:
     return "\n".join(out)
 
 
-async def summarize_day(date_str: str, rows: list) -> str:
-    """详细每日概括（最近3天用）。覆盖全天，别漏掉最晚时段。"""
-    # 取最近 1000 条（覆盖全天），每条 clip 1000 字瘦身，防输入过长 + 防漏掉晚上
-    text = transcript(rows, max_messages=1000, clip=1000)
+_RETRY_SUFFIX = ("\n\n注意：你上一次的输出超过长度上限被截断了。这次必须更狠地压缩："
+                "每个话题最多一两句、次要内容半句带过，但全天每个聊过的时段都必须保留，"
+                "务必写到当天最后一条消息所在的时段（含深夜）。")
+
+
+async def _head_notes(date_str: str, rows: list) -> str:
+    """一天消息太多时，把"更早时段"先压成要点（治"只总结尾巴、丢上午"）。失败返回空串，退化为旧行为。"""
+    text = transcript(rows, max_messages=2500, clip=400)
     if not text.strip():
         return ""
-    prompt = prompts.DAILY_SUMMARY.format(
+    prompt = prompts.DAY_HEAD.format(user_label=config.USER_LABEL, date=date_str, transcript=text)
+    try:
+        head = await _chat(
+            [{"role": "user", "content": prompt}],
+            config.HEAD_MAX_TOKENS,
+            config.SUMMARY_TEMPERATURE,
+        )
+    except Exception:
+        log.exception("较早时段要点生成失败（本次将只总结较晚时段）")
+        return ""
+    return _hard_cap(head, config.HEAD_MAX_CHARS)
+
+
+async def _day_material(date_str: str, rows: list, clip: int) -> str:
+    """把一整天的记录组装成总结素材：消息不超过 DAILY_RAW_MESSAGES 条时直接全量；
+    超过时把更早的先压成"较早时段要点"拼在开头，保证全天覆盖。"""
+    n = config.DAILY_RAW_MESSAGES
+    if len(rows) <= n:
+        return transcript(rows, max_messages=n, clip=clip)
+    head = await _head_notes(date_str, rows[:-n])
+    body = transcript(rows[-n:], max_messages=n, clip=clip)
+    if not head.strip():
+        return body
+    return ("【当天较早时段聊天要点（已压缩，非原文）】\n" + head.strip()
+            + "\n\n【当天较晚时段聊天原文】\n" + body)
+
+
+async def summarize_day(date_str: str, rows: list) -> str:
+    """详细每日概括（最近3天用）。覆盖全天，别漏掉最晚时段。
+
+    治"总结不完"三道保险：
+    1. 超量天拼"较早时段要点"，不再只看最后N条丢上午；
+    2. 输出顶到 max_tokens（strict_full）会被拦下，附言重试一次"压缩更狠但覆盖全天"；
+    3. 模型写超字数上限时，单独做一轮"只减细节不减时段"的压缩，硬截断只做最后兜底。
+    """
+    text = await _day_material(date_str, rows, clip=800)
+    if not text.strip():
+        return ""
+    base_prompt = prompts.DAILY_SUMMARY.format(
         user_label=config.USER_LABEL,
         ai_label=config.AI_LABEL,
         date=date_str,
         max_chars=config.DAILY_MAX_CHARS,
         transcript=text,
     )
-    summary = await _chat(
-        [{"role": "user", "content": prompt}],
-        config.DAILY_MAX_TOKENS,
-        config.SUMMARY_TEMPERATURE,
-    )
-    # 硬截断：无论模型写多长，最终字数绝不超过 DAILY_MAX_CHARS
+    summary = ""
+    try:
+        summary = await _chat(
+            [{"role": "user", "content": base_prompt}],
+            config.DAILY_MAX_TOKENS,
+            config.SUMMARY_TEMPERATURE,
+            strict_full=True,
+        )
+    except RuntimeError as exc:
+        if "被截断" not in str(exc):
+            raise  # 其他错误（空正文/HTTP）照常上抛，让按天循环记录失败
+        log.warning("每日概括输出被截断，压缩后重试一次：%s", date_str)
+        summary = await _chat(
+            [{"role": "user", "content": base_prompt + _RETRY_SUFFIX}],
+            config.DAILY_MAX_TOKENS,
+            config.SUMMARY_TEMPERATURE,
+            strict_full=True,
+        )
+    if len(summary) > config.DAILY_MAX_CHARS:
+        # 超长但完整：做一轮"减细节不减时段"的压缩，避免硬截断砍掉晚上
+        try:
+            compact = await _chat(
+                [{"role": "user", "content": prompts.DAILY_COMPRESS.format(
+                    date=date_str,
+                    max_chars=config.DAILY_MAX_CHARS,
+                    summary=summary,
+                    user_label=config.USER_LABEL,
+                )}],
+                config.DAILY_MAX_TOKENS,
+                config.SUMMARY_TEMPERATURE,
+                strict_full=True,
+            )
+            if compact.strip():
+                summary = compact
+        except Exception:
+            log.exception("超长总结压缩失败：%s（退化为硬截断）", date_str)
+    if len(summary) > config.DAILY_MAX_CHARS:
+        log.warning("每日概括最终超长，硬截断兜底：%s（%d 字）", date_str, len(summary))
     return _hard_cap(summary, config.DAILY_MAX_CHARS)
 
 
 async def rough_from_raw(date_str: str, rows: list) -> str:
-    """从一天的原始聊天记录直接生成粗略归档（1~3 句话）。"""
-    text = transcript(rows)
+    """从一天的原始聊天记录直接生成粗略归档（1~3 句话）。
+
+    超量天同样拼"较早时段要点"——历史回填（比如补8月的粗归档）时，
+    不能让月度概览只建立在"每天最后400条"的尾巴视角上。"""
+    text = await _day_material(date_str, rows, clip=400)
     if not text.strip():
         return ""
     prompt = prompts.ROUGH_ARCHIVE.format(
