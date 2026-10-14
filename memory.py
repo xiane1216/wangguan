@@ -2,7 +2,7 @@
 
 三段式记忆（开窗注入，窗口生命周期内冻结，保证 DeepSeek 前缀缓存稳定）：
   一、近期每日 —— 最近 RECENT_DAYS 天的详细概括
-  二、月度概览 —— 最近 RECENT_MONTHS 个月的概览
+  二、月度概览 —— 最近 RECENT_MONTHS 个月的概览（含进行中的当月）
   三、季度概览 —— 最近 RECENT_QUARTERS 个季的概览
   四、年度概览 —— 最近 RECENT_YEARS 年的概览
   五、长期记忆 —— 旧数据兜底（OB 搬运 + 早期合并的概括）
@@ -471,12 +471,13 @@ def _quarter_of(month_scope: str) -> str:
 
 
 async def _rollup_layers(today) -> dict:
-    """月/季/年分层滚动归档。只在对应周期结束后滚动，且每个 scope 只生成一次。"""
+    """月/季/年分层滚动归档。
+    已结束的月/季/年只在周期结束后滚动一次；当月（进行中）每次刷新都增量合并。"""
     stats = {"months_rolled": [], "quarters_rolled": [], "years_rolled": []}
     if not config.supabase_ready() or not config.deepseek_ready():
         return stats
 
-    # 月度：把已结束的月的 rough 压成 monthly
+    # 月度：已结束的月一次性压成 monthly；当月（进行中）增量合并
     try:
         rough_rows = await store.get_memories("rough", "", 500, desc=False)
         months = {}
@@ -487,19 +488,33 @@ async def _rollup_layers(today) -> dict:
                 months.setdefault(m, []).append(r)
         today_month = today.strftime("%Y-%m")
         for m in sorted(months):
-            if m >= today_month:
-                continue
-            if await store.get_memory("monthly", m):
+            if m > today_month:
                 continue
             texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}" for r in months[m]]
-            try:
-                monthly = await summarizer.summarize_month(m, texts)
-            except Exception:
-                log.exception("月度归档失败 %s", m)
-                continue
-            if monthly.strip():
-                await store.set_memory("monthly", m, monthly, {"source": "monthly_rollup"})
-                stats["months_rolled"].append(m)
+            if m == today_month:
+                # 进行中的月：增量合并，每次刷新都更新，不跳过
+                existing = await store.get_memory("monthly", m)
+                existing_text = (existing.get("content") or "").strip() if existing else ""
+                try:
+                    monthly = await summarizer.merge_month_in_progress(m, existing_text, texts)
+                except Exception:
+                    log.exception("进行中月度合并失败 %s", m)
+                    continue
+                if monthly.strip():
+                    await store.set_memory("monthly", m, monthly, {"source": "monthly_in_progress"})
+                    stats["months_rolled"].append(m)
+            else:
+                # 已结束的月：一次性生成，只做一次
+                if await store.get_memory("monthly", m):
+                    continue
+                try:
+                    monthly = await summarizer.summarize_month(m, texts)
+                except Exception:
+                    log.exception("月度归档失败 %s", m)
+                    continue
+                if monthly.strip():
+                    await store.set_memory("monthly", m, monthly, {"source": "monthly_rollup"})
+                    stats["months_rolled"].append(m)
     except Exception:
         log.exception("月度滚动失败")
 

@@ -6,7 +6,7 @@
 记忆分层：
 - 详细每日（最近3天用）：summarize_day
 - 粗略归档（老日子用，一天一两句话）：rough_from_raw / rough_from_summary
-- 月度概览：summarize_month
+- 月度概览：summarize_month / merge_month_in_progress
 - 季度概览：summarize_quarter
 - 年度概览：summarize_year
 - 长期记忆合并（旧逻辑兜底）：merge_longterm
@@ -274,7 +274,7 @@ async def rough_from_summary(date_str: str, daily_text: str) -> str:
 
 
 async def summarize_month(month_scope: str, texts: list) -> str:
-    """把某月的每日/粗略记录压成月度概览。"""
+    """把某月的每日/粗略记录压成月度概览（一次性，用于已结束的月）。"""
     joined = "\n".join(t for t in texts if (t or "").strip())
     if not joined.strip():
         return ""
@@ -283,6 +283,26 @@ async def summarize_month(month_scope: str, texts: list) -> str:
         scope=month_scope,
         max_chars=config.MONTHLY_MAX_CHARS,
         transcript=joined,
+    )
+    result = await _chat(
+        [{"role": "user", "content": prompt}],
+        config.MONTHLY_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+    )
+    return _hard_cap(result, config.MONTHLY_MAX_CHARS)
+
+
+async def merge_month_in_progress(month_scope: str, existing: str, new_texts: list) -> str:
+    """把新增的每日/粗略记录增量合并进「进行中」的月度概览。"""
+    joined = "\n".join(t for t in new_texts if (t or "").strip())
+    if not joined.strip():
+        return (existing or "").strip()
+    prompt = prompts.MONTHLY_IN_PROGRESS.format(
+        user_label=config.USER_LABEL,
+        scope=month_scope,
+        max_chars=config.MONTHLY_MAX_CHARS,
+        existing=(existing or "").strip() or "（暂无）",
+        new_texts=joined,
     )
     result = await _chat(
         [{"role": "user", "content": prompt}],
