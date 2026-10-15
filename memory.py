@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -468,6 +469,87 @@ def _quarter_of(month_scope: str) -> str:
         return f"{y}-Q{q}"
     except Exception:
         return month_scope
+
+
+async def regenerate(kind: str, scope: str) -> dict:
+    """定向重总结某一层的一个周期（管理接口用，不影响正常刷新流程）。
+
+    kind: daily / monthly / quarterly / yearly
+    scope: daily -> '2026-10-14'；monthly -> '2026-10'；quarterly -> '2026-Q4'；yearly -> '2026'
+    只重做指定周期，不碰其他任何日期/周期。
+    """
+    kind = (kind or "").strip().lower()
+    scope = (scope or "").strip()
+    if kind not in ("daily", "monthly", "quarterly", "yearly"):
+        return {"ok": False, "error": "kind 必须是 daily / monthly / quarterly / yearly"}
+
+    if not config.supabase_ready():
+        return {"ok": False, "error": "Supabase 未配置"}
+    if not config.deepseek_ready():
+        return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置"}
+
+    # ---- 日总结：拉当天全部原文，与 refresh_once 同款 summarize_day ----
+    if kind == "daily":
+        d = _parse_date(scope)
+        if not d:
+            return {"ok": False, "error": "scope 格式应为 YYYY-MM-DD"}
+        rows = await store.fetch_chats_between(d, d + timedelta(days=1))
+        if not rows:
+            return {"ok": False, "error": f"{scope} 没有聊天记录", "messages": 0}
+        summary = await summarizer.summarize_day(scope, rows)
+        if not summary.strip():
+            return {"ok": False, "error": "总结结果为空（当天没有可总结的聊天内容）", "messages": len(rows)}
+        await store.set_memory("daily", scope, summary, {"messages": len(rows), "tz_fix": 1})
+        return {"ok": True, "kind": kind, "scope": scope,
+                "messages": len(rows), "chars": len(summary)}
+
+    # ---- 月总结：从该月的 rough（粗略归档）重新汇总 ----
+    if kind == "monthly":
+        if len(scope) != 7 or not scope.startswith(("19", "20")):
+            return {"ok": False, "error": "scope 格式应为 YYYY-MM"}
+        rough_rows = await store.get_memories("rough", "", 500, desc=False)
+        texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}"
+                 for r in rough_rows
+                 if str(r.get("scope") or "")[:7] == scope and (r.get("content") or "").strip()]
+        if not texts:
+            return {"ok": False, "error": f"{scope} 没有可用的粗略归档（日总结要先归档成 rough）"}
+        monthly = await summarizer.summarize_month(scope, texts)
+        if not monthly.strip():
+            return {"ok": False, "error": "月度总结结果为空"}
+        await store.set_memory("monthly", scope, monthly, {"source": "monthly_regenerate"})
+        return {"ok": True, "kind": kind, "scope": scope, "days": len(texts), "chars": len(monthly)}
+
+    # ---- 季总结：从该季的 monthly 重新汇总 ----
+    if kind == "quarterly":
+        if not re.match(r"^\d{4}-Q[1-4]$", scope):
+            return {"ok": False, "error": "scope 格式应为 YYYY-Qn（如 2026-Q4）"}
+        monthly_rows = await store.get_memories("monthly", "", 200, desc=False)
+        texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}"
+                 for r in monthly_rows
+                 if _quarter_of(str(r.get("scope") or "")) == scope and (r.get("content") or "").strip()]
+        if not texts:
+            return {"ok": False, "error": f"{scope} 没有可用的月度总结"}
+        quarterly = await summarizer.summarize_quarter(scope, texts)
+        if not quarterly.strip():
+            return {"ok": False, "error": "季度总结结果为空"}
+        await store.set_memory("quarterly", scope, quarterly, {"source": "quarterly_regenerate"})
+        return {"ok": True, "kind": kind, "scope": scope, "months": len(texts), "chars": len(quarterly)}
+
+    # ---- 年总结：从该年的 quarterly 重新汇总 ----
+    if kind == "yearly":
+        if not re.match(r"^\d{4}$", scope):
+            return {"ok": False, "error": "scope 格式应为 YYYY"}
+        quarterly_rows = await store.get_memories("quarterly", "", 100, desc=False)
+        texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}"
+                 for r in quarterly_rows
+                 if str(r.get("scope") or "")[:4] == scope and (r.get("content") or "").strip()]
+        if not texts:
+            return {"ok": False, "error": f"{scope} 没有可用的季度总结"}
+        yearly = await summarizer.summarize_year(scope, texts)
+        if not yearly.strip():
+            return {"ok": False, "error": "年度总结结果为空"}
+        await store.set_memory("yearly", scope, yearly, {"source": "yearly_regenerate"})
+        return {"ok": True, "kind": kind, "scope": scope, "quarters": len(texts), "chars": len(yearly)}
 
 
 async def _rollup_layers(today) -> dict:

@@ -217,6 +217,22 @@ dialog h3{font-size:18px;margin-bottom:16px}
       <div id="refreshResult" class="muted" style="margin-top:10px"></div>
     </div>
     <div class="card">
+      <h2>定向重总结 <span class="badge">单个周期</span></h2>
+      <p class="muted" style="margin-bottom:10px">单独重新总结某一天/某个月/某个季度/某一年，不影响其他日期。日总结会重新拉当天全部聊天原文；月/季/年基于下层已有总结重新汇总。</p>
+      <div class="row" style="margin-bottom:10px">
+        <select id="regenKind" style="width:110px">
+          <option value="daily">日总结</option>
+          <option value="monthly">月总结</option>
+          <option value="quarterly">季总结</option>
+          <option value="yearly">年总结</option>
+        </select>
+        <input id="regenScope" placeholder="按右侧格式" style="width:150px">
+        <span class="muted" id="regenHint" style="align-self:center">格式：2026-10-14</span>
+      </div>
+      <button class="btn sm primary" onclick="runRegenerate()">重新生成</button>
+      <div id="regenResult" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
       <h2>长期记忆改写</h2>
       <p class="muted" style="margin-bottom:10px">把旧格式长期记忆改写为第一人称叙述。</p>
       <button class="btn sm" onclick="runRestyle()">改写</button>
@@ -354,6 +370,30 @@ async function runRefresh(){
     const d=await api('/admin/refresh?days='+days,{method:'POST'});
     $('refreshResult').innerHTML='<span class="tag green">完成</span> '+esc(JSON.stringify(d));
   }catch(e){$('refreshResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+}
+// regenerate
+const REGEN_HINTS={daily:'2026-10-14',monthly:'2026-10',quarterly:'2026-Q4',yearly:'2026'};
+document.addEventListener('DOMContentLoaded',()=>{
+  const sel=$('regenKind');if(!sel)return;
+  sel.onchange=()=>{$('regenHint').textContent='格式：'+REGEN_HINTS[sel.value];$('regenScope').placeholder=REGEN_HINTS[sel.value]};
+});
+async function runRegenerate(){
+  const kind=$('regenKind').value,scope=$('regenScope').value.trim();
+  if(!scope){$('regenResult').innerHTML='<span class="tag red">请填写日期</span>';return}
+  $('regenResult').innerHTML='<span class="spin"></span> 重新总结中...（调用 DeepSeek，日总结约需 10~60 秒）';
+  try{
+    const d=await api('/admin/regenerate?kind='+encodeURIComponent(kind)+'&scope='+encodeURIComponent(scope),{method:'POST'});
+    if(d.ok){
+      let extra='';
+      if(d.messages!=null)extra='，基于 '+d.messages+' 条原始消息';
+      if(d.days!=null)extra='，汇总了 '+d.days+' 天的归档';
+      if(d.months!=null)extra='，汇总了 '+d.months+' 个月总结';
+      if(d.quarters!=null)extra='，汇总了 '+d.quarters+' 个季度总结';
+      $('regenResult').innerHTML='<span class="tag green">完成</span> '+(scope+' 共 '+d.chars+' 字'+extra);
+    }else{
+      $('regenResult').innerHTML='<span class="tag red">失败</span> '+esc(d.error||'未知错误');
+    }
+  }catch(e){$('regenResult').innerHTML='<span class="tag red">失败</span> '+e.message}
 }
 async function runRestyle(){
   $('restyleResult').innerHTML='<span class="spin"></span> 改写中...';

@@ -321,6 +321,25 @@ async def admin_restyle(request: Request):
     return JSONResponse({"ok": True, "before_chars": len(existing), "after_chars": len(text)})
 
 
+async def admin_regenerate(request: Request):
+    """定向重总结某一层的一个周期（只动指定周期，不影响其他日期）。
+
+    参数: kind=daily|monthly|quarterly|yearly, scope=日期/月/季/年
+    """
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    kind = request.query_params.get("kind", "").strip()
+    scope = request.query_params.get("scope", "").strip()
+    if not kind or not scope:
+        return JSONResponse({"ok": False, "error": "缺少 kind / scope 参数"}, status_code=400)
+    try:
+        result = await memory.regenerate(kind, scope)
+    except Exception as exc:
+        log.exception("定向重总结失败 kind=%s scope=%s", kind, scope)
+        return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+    return JSONResponse(result)
+
+
 async def admin_import_ob(request: Request):
     if not _check_admin(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -422,6 +441,7 @@ app = Starlette(routes=[
     Route("/admin/memory", admin_memory, methods=["GET"]),
     Route("/admin/refresh", admin_refresh, methods=["GET", "POST"]),
     Route("/admin/restyle", admin_restyle, methods=["GET", "POST"]),
+    Route("/admin/regenerate", admin_regenerate, methods=["GET", "POST"]),
     Route("/admin/import_ob", admin_import_ob, methods=["GET", "POST"]),
     Route("/admin/preview", admin_preview, methods=["GET"]),
     Route("/debug/xray", debug_xray, methods=["GET"]),
