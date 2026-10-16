@@ -87,6 +87,7 @@ RECENT_YEARS = _int("RECENT_YEARS", 1)                 # 注入保留最近几�
 # ---- 宝宝画像（手动触发的用户画像记忆，kind=profile） ----
 PROFILE_MAX_CHARS = _int("PROFILE_MAX_CHARS", 1200)        # 画像全文上限（字）
 PROFILE_BATCH_MESSAGES = _int("PROFILE_BATCH_MESSAGES", 200)  # 提取层每批处理多少条消息
+PROFILE_CONCURRENCY = _int("PROFILE_CONCURRENCY", 3)       # 提取层并发路数（官方 flash 并发上限 2500，这点并发毫无压力）
 PROFILE_EXTRACT_MAX_TOKENS = _int("PROFILE_EXTRACT_MAX_TOKENS", 4000)  # 提取层单批输出 token 上限
 PROFILE_COMPOSE_MAX_TOKENS = _int("PROFILE_COMPOSE_MAX_TOKENS", 4000)  # 成稿层输出 token 上限
 

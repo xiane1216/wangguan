@@ -727,7 +727,7 @@ def start_profile_task() -> dict:
         "started_at": _now().isoformat(timespec="seconds"), "finished_at": "",
     })
     asyncio.create_task(_profile_run())
-    return {"ok": True, "hint": "画像总结已启动。首次全量要跑很久（几万条消息逐批提取），可用 /admin/profile_status 轮询进度"}
+    return {"ok": True, "hint": "画像总结已启动。首次全量要跑一阵（几万条消息分批并发提取），可用 /admin/profile_status 轮询进度"}
 
 
 async def _profile_run():
@@ -771,17 +771,30 @@ async def _profile_run():
             log.info("画像总结：没有新消息，画像保持原样（%d 字）", len(old_profile))
             return
 
-        # ---- 提取层：分批过全部消息 ----
+        # ---- 提取层：分批过全部消息（N 路并发，一批一个 DeepSeek 调用） ----
         batch = max(20, config.PROFILE_BATCH_MESSAGES)
+        conc = max(1, min(config.PROFILE_CONCURRENCY, 8))
         st["phase"] = "extracting"
-        for i in range(0, total, batch):
-            chunk = rows[i:i + batch]
-            st["done"] = min(i + len(chunk), total)
-            part = await summarizer.extract_profile_facts(chunk)
-            if part:
-                facts = (facts + "\n" + part).strip() if facts else part
-            last_ts = str(chunk[-1].get("created_at") or "")
-            # 断点实时落库：任何点挂掉，重跑只补本批
+        waves = [rows[i:i + batch] for i in range(0, total, batch)]
+        parts: list = [""] * len(waves)
+
+        async def _extract_one(idx: int, chunk: list):
+            parts[idx] = await summarizer.extract_profile_facts(chunk) or ""
+            st["done"] = min(st["done"] + len(chunk), total)
+
+        for w0 in range(0, len(waves), conc):
+            idxs = list(range(w0, min(w0 + conc, len(waves))))
+            outcomes = await asyncio.gather(*[_extract_one(i, waves[i]) for i in idxs],
+                                            return_exceptions=True)
+            errs = [o for o in outcomes if isinstance(o, Exception)]
+            if errs:
+                raise errs[0]
+            # 本波全部成功才并入清单 + 推进断点（挂掉重跑最多损失一波）
+            for i in idxs:
+                if parts[i]:
+                    facts = (facts + "\n" + parts[i]).strip() if facts else parts[i]
+            last_ts = str(waves[idxs[-1]][-1].get("created_at") or "")
+            # 断点实时落库：任何点挂掉，重跑只补未完成的那一波
             await store.set_memory("state", "profile_extract",
                                    json.dumps({"ts": last_ts, "facts": facts}, ensure_ascii=False), {})
 
