@@ -120,7 +120,7 @@ async def recent_rows(limit: int | None = None) -> tuple[list, bool]:
     return dedup[-n:], False
 
 
-def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows) -> str:
+def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows, profile: str = "") -> str:
     parts = []
     if dailies:
         seg = []
@@ -156,6 +156,14 @@ def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_r
             parts.append("=== 四、年度概览 ===\n" + "\n\n".join(reversed(seg)))
     if (longterm or "").strip():
         parts.append("=== 五、长期记忆（更早的历史兜底） ===\n" + longterm.strip())
+    if (profile or "").strip():
+        # 宝宝画像：长期记忆之后、最近原文之前；免责声明装配时追加，不存库。
+        u = config.USER_LABEL
+        parts.append(
+            f"=== {u}的画像（我对{u}的长期认知） ===\n" + profile.strip()
+            + f"\n（这份画像只是过往聊天里的记录和观察，不一定代表当下{u}的想法、情绪和感情。"
+              f"此刻的{u}，以此刻TA说的话为准。）"
+        )
     if last_rows:
         parts.append(
             f"=== 六、最近聊天记录（最后 {len(last_rows)} 条原文） ===\n"
@@ -182,7 +190,9 @@ async def _build_block(first_user_text: str) -> tuple[str, bool]:
     quarterlies = await store.get_memories("quarterly", "", config.RECENT_QUARTERS, desc=True)
     yearlies = await store.get_memories("yearly", "", config.RECENT_YEARS, desc=True)
     last_rows, confident_no_history = await recent_rows()
-    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows)
+    profile_row = await store.get_memory("profile", "")
+    profile = (profile_row or {}).get("content") or "" if profile_row else ""
+    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows, profile)
     return block, (bool(block) or confident_no_history)
 
 
@@ -242,10 +252,13 @@ async def build_preview(first_user_hint: str = "") -> dict:
     quarterlies = await store.get_memories("quarterly", "", config.RECENT_QUARTERS, desc=True)
     yearlies = await store.get_memories("yearly", "", config.RECENT_YEARS, desc=True)
     last_rows, _no_history = await recent_rows()
-    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows)
+    profile_row = await store.get_memory("profile", "")
+    profile = (profile_row or {}).get("content") or "" if profile_row else ""
+    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows, profile)
     return {
         "first_user_matched": first_user[:50],
         "longterm_chars": len((longterm or "").strip()),
+        "profile_chars": len(profile.strip()),
         "recent_days": [{"date": d.get("scope"), "chars": len(d.get("content") or "")} for d in dailies],
         "monthlies": [{"scope": m.get("scope"), "chars": len(m.get("content") or "")} for m in monthlies],
         "quarterlies": [{"scope": q.get("scope"), "chars": len(q.get("content") or "")} for q in quarterlies],
@@ -684,3 +697,113 @@ async def seed_from_ob_if_empty() -> bool:
     await store.set_memory("longterm", "", text, {"source": "ombre_breath_verbatim"})
     log.info("已把 Ombre Brain 浮现记忆原样搬进长期记忆（%d 字）", len(text))
     return True
+
+
+# ---- 宝宝画像（手动触发的用户画像总结，kind=profile） ----
+# 两层隔离：提取层每批消息→事实清单；成稿层只见清单不见原文。
+# 进度供 /admin/profile_status 轮询；提取断点实时存 state，中断重跑可续。
+
+_profile_state: dict = {
+    "running": False, "phase": "", "done": 0, "total": 0,
+    "error": "", "chars": 0, "started_at": "", "finished_at": "",
+}
+
+
+def profile_status() -> dict:
+    return dict(_profile_state)
+
+
+def start_profile_task() -> dict:
+    """启动画像总结后台任务（同一时间只允许一个）。立即返回，进度靠轮询。"""
+    if _profile_state.get("running"):
+        return {"ok": False, "error": "画像总结已在运行中，等它跑完（进度见 /admin/profile_status）"}
+    if not config.supabase_ready():
+        return {"ok": False, "error": "Supabase 未配置"}
+    if not config.deepseek_ready():
+        return {"ok": False, "error": "DEEPSEEK_API_KEY 未配置"}
+    _profile_state.update({
+        "running": True, "phase": "preparing", "done": 0, "total": 0,
+        "error": "", "chars": 0,
+        "started_at": _now().isoformat(timespec="seconds"), "finished_at": "",
+    })
+    asyncio.create_task(_profile_run())
+    return {"ok": True, "hint": "画像总结已启动。首次全量要跑很久（几万条消息逐批提取），可用 /admin/profile_status 轮询进度"}
+
+
+async def _profile_run():
+    """画像主流程：定位断点 → 拉新消息 → 分批提取事实 → 成稿存库。
+
+    断点续传：
+    - profile 行 meta.checkpoint = 上次成稿完成时最后处理到的消息时间戳
+    - state 行 profile_extract = {"ts": 提取中途断点, "facts": 已累积事实}（JSON）
+      提取每批后实时写；成稿成功后清空。中途挂掉重跑时从断点继续，不重复花 token。
+    """
+    st = _profile_state
+    try:
+        profile_row = await store.get_memory("profile", "")
+        old_profile = (profile_row or {}).get("content") or "" if profile_row else ""
+        base_cp = ""
+        if profile_row:
+            try:
+                base_cp = str(json.loads(profile_row.get("meta") or "{}").get("checkpoint") or "")
+            except Exception:
+                base_cp = ""
+        saved_ts, facts = "", ""
+        try:
+            saved = json.loads(await store.get_state("profile_extract") or "{}")
+            saved_ts = str(saved.get("ts") or "")
+            facts = str(saved.get("facts") or "")
+        except Exception:
+            saved_ts, facts = "", ""
+        # 上次提取中途断掉（断点比已存画像新）→ 续跑，事实清单接着用
+        resume = bool(saved_ts) and (not base_cp or saved_ts >= base_cp)
+        start_ts = saved_ts if resume else base_cp
+        if not resume:
+            facts = ""
+
+        rows = await store.fetch_chats_after(start_ts)
+        rows = [r for r in rows
+                if r.get("role") in ("user", "assistant") and (r.get("content") or "").strip()]
+        total = len(rows)
+        st["total"] = total
+        if not rows and not facts.strip():
+            st.update(phase="done", done=0, chars=len(old_profile))
+            log.info("画像总结：没有新消息，画像保持原样（%d 字）", len(old_profile))
+            return
+
+        # ---- 提取层：分批过全部消息 ----
+        batch = max(20, config.PROFILE_BATCH_MESSAGES)
+        st["phase"] = "extracting"
+        for i in range(0, total, batch):
+            chunk = rows[i:i + batch]
+            st["done"] = min(i + len(chunk), total)
+            part = await summarizer.extract_profile_facts(chunk)
+            if part:
+                facts = (facts + "\n" + part).strip() if facts else part
+            last_ts = str(chunk[-1].get("created_at") or "")
+            # 断点实时落库：任何点挂掉，重跑只补本批
+            await store.set_memory("state", "profile_extract",
+                                   json.dumps({"ts": last_ts, "facts": facts}, ensure_ascii=False), {})
+
+        # ---- 成稿层 ----
+        st["phase"] = "composing"
+        st["done"] = total
+        if not facts.strip():
+            st.update(phase="done", chars=len(old_profile))
+            await store.set_memory("state", "profile_extract", "", {})
+            return
+        final_cp = str(rows[-1].get("created_at") or "") if rows else (start_ts or base_cp)
+        text = await summarizer.compose_profile(facts, old_profile)
+        if not text.strip():
+            raise RuntimeError("成稿层返回了空画像（旧画像未动）")
+        await store.set_memory("profile", "", text,
+                                {"checkpoint": final_cp, "source": "profile_summarize"})
+        await store.set_memory("state", "profile_extract", "", {})  # 清断点
+        st.update(phase="done", chars=len(text), error="")
+        log.info("宝宝画像已生成：%d 字（本轮处理 %d 条消息）", len(text), total)
+    except Exception as exc:
+        log.exception("宝宝画像总结失败")
+        st.update(phase="error", error=f"{type(exc).__name__}: {exc}"[:500])
+    finally:
+        st["running"] = False
+        st["finished_at"] = _now().isoformat(timespec="seconds")

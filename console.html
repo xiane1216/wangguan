@@ -189,6 +189,11 @@ dialog h3{font-size:18px;margin-bottom:16px}
       <h2>📚 长期记忆（历史兜底） <span class="badge" id="ltBadge">—</span></h2>
       <pre class="mono" id="ltView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
     </div>
+    <div class="card">
+      <h2>👶 宝宝的画像 <span class="badge" id="profileBadge">—</span></h2>
+      <p class="muted" style="margin-bottom:10px">从全部聊天记录里总结的、对宝宝的长期认知。注入时会自动附上免责声明（过往观察，不代表当下）。在工具页手动生成/更新。</p>
+      <pre class="mono" id="profileView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
+    </div>
     <div class="row" style="margin-bottom:14px">
       <button class="btn sm" onclick="loadMemory()">刷新记忆</button>
     </div>
@@ -231,6 +236,12 @@ dialog h3{font-size:18px;margin-bottom:16px}
       </div>
       <button class="btn sm primary" onclick="runRegenerate()">重新生成</button>
       <div id="regenResult" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>总结宝宝画像 <span class="badge">手动</span></h2>
+      <p class="muted" style="margin-bottom:10px">从全部聊天记录里提取关于宝宝的事实，写成一份对宝宝的认知画像（之后随开窗注入）。首次全量要处理几万条消息、跑很久，中途可关页面，断了重点会续跑；之后再点是增量更新，很快。</p>
+      <button class="btn sm primary" id="profileBtn" onclick="runProfile()">开始总结</button>
+      <div id="profileRunResult" style="margin-top:10px"></div>
     </div>
     <div class="card">
       <h2>长期记忆改写</h2>
@@ -345,6 +356,8 @@ async function loadMemory(){
     const d=await api('/admin/memory');
     $('ltBadge').textContent=(d.longterm_chars||0)+' 字';
     $('ltView').textContent=d.longterm||'(空)';
+    $('profileBadge').textContent=(d.profile_chars||0)+' 字';
+    $('profileView').textContent=d.profile||'(还没有画像，去工具页点「总结宝宝画像」)';
     renderMemoryList('dailiesView','dailyBadge',d.recent_daily,'date');
     renderMemoryList('monthliesView','monthlyBadge',d.monthlies,'scope');
     renderMemoryList('quarterliesView','quarterlyBadge',d.quarterlies,'scope');
@@ -395,6 +408,48 @@ async function runRegenerate(){
     }
   }catch(e){$('regenResult').innerHTML='<span class="tag red">失败</span> '+e.message}
 }
+// profile summarize
+const PROFILE_PHASE_CN={preparing:'准备中',extracting:'提取事实中（每批调用一次 DeepSeek，请耐心）',composing:'撰写画像中',done:'完成',error:'出错'};
+let profileTimer=null;
+function renderProfileStatus(s){
+  const el=$('profileRunResult');if(!el)return;
+  $('profileBtn').disabled=!!s.running;
+  const phase=PROFILE_PHASE_CN[s.phase]||s.phase||'—';
+  if(s.running){
+    const pct=s.total>0?Math.round((s.done||0)/s.total*100):0;
+    el.innerHTML='<div class="row" style="margin-bottom:6px"><span class="spin"></span> <span>'+esc(phase)+'</span></div>'
+      +'<div class="muted" style="margin-bottom:6px">已处理 '+(s.done||0)+' / '+(s.total||0)+' 条（'+pct+'%）</div>'
+      +'<progress max="100" value="'+pct+'" style="width:100%"></progress>';
+  }else if(s.phase==='done'){
+    el.innerHTML='<span class="tag green">完成</span> 画像共 '+(s.chars||0)+' 字'+(s.finished_at?'（'+s.finished_at+'）':'')+'，去「记忆」页看「宝宝的画像」';
+  }else if(s.phase==='error'){
+    el.innerHTML='<span class="tag red">失败</span> '+esc(s.error||'未知错误')+'<div class="muted" style="margin-top:4px">再次点击「开始总结」会从断点续跑，已提取的部分不会重花 token。</div>';
+  }
+}
+async function pollProfile(){
+  let s;
+  try{s=await api('/admin/profile_status')}
+  catch(e){profileTimer=setTimeout(pollProfile,5000);return}
+  renderProfileStatus(s);
+  profileTimer=s.running?setTimeout(pollProfile,3000):null;
+}
+async function runProfile(){
+  try{
+    const d=await api('/admin/profile_summarize',{method:'POST'});
+    if(!d.ok){$('profileRunResult').innerHTML='<span class="tag red">无法启动</span> '+esc(d.error||'');return}
+    if(profileTimer)clearTimeout(profileTimer);
+    pollProfile();
+  }catch(e){$('profileRunResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+}
+async function checkProfileOnce(){
+  if(!akey())return;
+  try{
+    const s=await api('/admin/profile_status');
+    if(!s||(!s.running&&!s.phase))return;
+    renderProfileStatus(s);
+    if(s.running)pollProfile();
+  }catch(e){}
+}
 async function runRestyle(){
   $('restyleResult').innerHTML='<span class="spin"></span> 改写中...';
   try{
@@ -440,7 +495,7 @@ $('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e
 // init
 function init(){
   loadSettings();
-  if(akey()){loadStatus();}
+  if(akey()){loadStatus();checkProfileOnce();}
   else{openSettings();}
 }
 window.addEventListener('DOMContentLoaded',init);

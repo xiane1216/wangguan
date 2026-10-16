@@ -101,6 +101,27 @@ async def fetch_chats_between(start_date, end_date, limit: int = 20000) -> list:
     return out[:cap]
 
 
+async def fetch_chats_after(after_ts: str = "", limit: int = 200000) -> list:
+    """宝宝画像用：拉取 after_ts 之后（含，重复处理无害）的全部聊天记录，按时间升序。
+
+    after_ts 为空 = 从最早开始全量拉。offset 翻页拉全（Supabase 单页约 1000 行）。
+    画像首次全量约 3.6 万条，20000 上限不够，所以单独一个不带 2 万 cap 的版本。
+    """
+    base = "select=id,assistant_id,conversation_id,role,content,created_at&order=created_at.asc,id.asc"
+    if config.ASSISTANT_ID:
+        base += f"&assistant_id=eq.{config.ASSISTANT_ID}"
+    if (after_ts or "").strip():
+        base += f"&created_at=gte.{after_ts.strip()}"
+    out, offset = [], 0
+    while offset < limit:
+        rows = await _sb_get(config.CHAT_TABLE, f"{base}&limit=1000&offset={offset}")
+        if not rows:
+            break
+        out.extend(rows)
+        offset += len(rows)
+    return out[:limit]
+
+
 # ---- 网关记忆（gateway_memory） ----
 
 async def get_longterm() -> str | None:

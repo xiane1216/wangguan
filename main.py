@@ -263,8 +263,12 @@ async def admin_memory(request: Request):
     absorbed_until = await store.get_state("absorbed_until")
     last_refresh = await store.get_state("last_refresh")
     last_errors = await store.get_state("last_errors")
+    profile_row = await store.get_memory("profile", "")
+    profile = (profile_row or {}).get("content") or "" if profile_row else None
     return JSONResponse({
         "longterm": longterm,
+        "profile": profile,
+        "profile_chars": len(profile or ""),
         "last_errors": last_errors,
         "longterm_chars": len((longterm or "").strip()),
         "recent_daily": [{"date": d.get("scope"), "content": d.get("content")} for d in dailies],
@@ -338,6 +342,21 @@ async def admin_regenerate(request: Request):
         log.exception("定向重总结失败 kind=%s scope=%s", kind, scope)
         return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
     return JSONResponse(result)
+
+
+async def admin_profile_summarize(request: Request):
+    """启动宝宝画像总结后台任务（手动触发，同一时间只允许一个）。"""
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    result = memory.start_profile_task()
+    return JSONResponse(result, status_code=200 if result.get("ok") else 409)
+
+
+async def admin_profile_status(request: Request):
+    """轮询画像总结进度：running/phase/done/total/error/chars。"""
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse(memory.profile_status(), headers={"Cache-Control": "no-store"})
 
 
 async def admin_import_ob(request: Request):
@@ -442,6 +461,8 @@ app = Starlette(routes=[
     Route("/admin/refresh", admin_refresh, methods=["GET", "POST"]),
     Route("/admin/restyle", admin_restyle, methods=["GET", "POST"]),
     Route("/admin/regenerate", admin_regenerate, methods=["GET", "POST"]),
+    Route("/admin/profile_summarize", admin_profile_summarize, methods=["GET", "POST"]),
+    Route("/admin/profile_status", admin_profile_status, methods=["GET"]),
     Route("/admin/import_ob", admin_import_ob, methods=["GET", "POST"]),
     Route("/admin/preview", admin_preview, methods=["GET"]),
     Route("/debug/xray", debug_xray, methods=["GET"]),

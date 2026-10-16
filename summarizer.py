@@ -392,3 +392,77 @@ async def summarize_rollup(rows: list) -> str:
         config.ROLLUP_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
+
+
+# ---- 宝宝画像（两层隔离防编造：提取层见原文只出事实清单；成稿层只见清单不见原文） ----
+
+_PROFILE_OPEN = "「画像开始」"
+_PROFILE_CLOSE = "「画像结束」"
+_EXTRACT_OPEN = "「提取开始」"
+
+
+def _cut_between(text: str, open_marker: str, close_marker: str | None = None) -> str:
+    """截取「开始标记之后、（若有）结束标记之前」的正文（防推理/废话泄漏）。"""
+    text = str(text or "")
+    idx = text.rfind(open_marker)
+    if idx >= 0:
+        text = text[idx + len(open_marker):]
+    if close_marker:
+        idx2 = text.rfind(close_marker)
+        if idx2 >= 0:
+            text = text[:idx2]
+    return text.strip()
+
+
+def _profile_transcript(rows: list, clip: int = 1500) -> str:
+    """画像提取层专用转写：带 [月-日 时:分] 日期戳（提取的每条事实要标"依据日期"）。"""
+    out = []
+    for r in rows:
+        role = r.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        who = config.USER_LABEL if role == "user" else config.AI_LABEL
+        ts = str(r.get("created_at") or "").replace("T", " ")
+        stamp = ts[5:16] if len(ts) >= 16 else ts  # "10-14 21:30"
+        out.append(f"[{stamp}] {who}: {_clip(r.get("content"), clip)}")
+    return "\n".join(out)
+
+
+async def extract_profile_facts(rows: list) -> str:
+    """提取层：一批消息 → 关于用户的稳定事实清单。该批无可提取内容时返回空串。"""
+    text = _profile_transcript(rows)
+    if not text.strip():
+        return ""
+    prompt = prompts.PROFILE_EXTRACT.format(
+        user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
+        transcript=text,
+    )
+    raw = await _chat(
+        [{"role": "user", "content": prompt}],
+        config.PROFILE_EXTRACT_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+        strict_full=True,  # 事实清单被 max_tokens 截断 = 断在一半，宁可报错重跑该批
+    )
+    facts = _cut_between(raw, _EXTRACT_OPEN)
+    if not facts or facts.strip() == "无":
+        return ""
+    return facts.strip()
+
+
+async def compose_profile(facts: str, existing_profile: str = "") -> str:
+    """成稿层：事实清单（+已有旧画像）→ 画像全文。只见清单不见原文，无原料可编。"""
+    prompt = prompts.PROFILE_COMPOSE.format(
+        user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
+        max_chars=config.PROFILE_MAX_CHARS,
+        facts=facts.strip(),
+        profile=(existing_profile or "").strip(),
+    )
+    raw = await _chat(
+        [{"role": "user", "content": prompt}],
+        config.PROFILE_COMPOSE_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+        strict_full=True,
+    )
+    return _hard_cap(_cut_between(raw, _PROFILE_OPEN, _PROFILE_CLOSE), config.PROFILE_MAX_CHARS)
