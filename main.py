@@ -345,10 +345,11 @@ async def admin_regenerate(request: Request):
 
 
 async def admin_profile_summarize(request: Request):
-    """启动宝宝画像总结后台任务（手动触发，同一时间只允许一个）。"""
+    """启动宝宝画像总结后台任务（手动触发，同一时间只允许一个）。force=1 = 全量重跑。"""
     if not _check_admin(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    result = memory.start_profile_task()
+    force = request.query_params.get("force", "").strip().lower() in ("1", "true", "yes")
+    result = memory.start_profile_task(force=force)
     return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
 

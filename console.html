@@ -239,8 +239,11 @@ dialog h3{font-size:18px;margin-bottom:16px}
     </div>
     <div class="card">
       <h2>总结宝宝画像 <span class="badge">手动</span></h2>
-      <p class="muted" style="margin-bottom:10px">从全部聊天记录里提取关于宝宝的事实，写成一份对宝宝的认知画像（之后随开窗注入）。首次全量要处理几万条消息、需要一段时间（已并发加速）；中途可关页面，断了重点会续跑；之后再点是增量更新，很快。</p>
-      <button class="btn sm primary" id="profileBtn" onclick="runProfile()">开始总结</button>
+      <p class="muted" style="margin-bottom:10px">从全部聊天记录里提取关于宝宝的事实，写成一份对宝宝的认知画像（之后随开窗注入）。「开始总结」= 增量更新（只处理上次之后的新消息）；画像写得不满意/太旧时点「强制全量重跑」= 推倒重来（从头重新提取，约 20~40 分钟）。中途可关页面，断了会续跑。</p>
+      <div class="row">
+        <button class="btn sm primary" id="profileBtn" onclick="runProfile()">开始总结（增量）</button>
+        <button class="btn sm" id="profileForceBtn" onclick="runProfile(true)">强制全量重跑</button>
+      </div>
       <div id="profileRunResult" style="margin-top:10px"></div>
     </div>
     <div class="card">
@@ -414,6 +417,7 @@ let profileTimer=null;
 function renderProfileStatus(s){
   const el=$('profileRunResult');if(!el)return;
   $('profileBtn').disabled=!!s.running;
+  $('profileForceBtn').disabled=!!s.running;
   const phase=PROFILE_PHASE_CN[s.phase]||s.phase||'—';
   if(s.running){
     const pct=s.total>0?Math.round((s.done||0)/s.total*100):0;
@@ -433,9 +437,10 @@ async function pollProfile(){
   renderProfileStatus(s);
   profileTimer=s.running?setTimeout(pollProfile,3000):null;
 }
-async function runProfile(){
+async function runProfile(force){
+  if(force&&!confirm('全量重跑会忽略已有画像和断点，从头重新提取全部消息（约 20~40 分钟，会重新消耗一次提取 token）。确定？'))return;
   try{
-    const d=await api('/admin/profile_summarize',{method:'POST'});
+    const d=await api('/admin/profile_summarize'+(force?'?force=1':''),{method:'POST'});
     if(!d.ok){$('profileRunResult').innerHTML='<span class="tag red">无法启动</span> '+esc(d.error||'');return}
     if(profileTimer)clearTimeout(profileTimer);
     pollProfile();

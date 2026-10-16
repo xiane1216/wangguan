@@ -713,7 +713,7 @@ def profile_status() -> dict:
     return dict(_profile_state)
 
 
-_FACT_DATE_RE = re.compile(r"(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}-\d{1,2})")
+_FACT_DATE_RE = re.compile(r"(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}-\d{1,2}|\d{1,2}月\d{1,2}日)")
 
 
 def _fact_key_date(line: str) -> tuple:
@@ -725,6 +725,12 @@ def _fact_key_date(line: str) -> tuple:
         key, raw_date = line, ""
     m = _FACT_DATE_RE.search(raw_date)
     norm = m.group(1) if m else ""
+    if "月" in norm:  # '10月14日' -> '10-14'
+        try:
+            mm, dd = norm.replace("日", "").split("月")
+            norm = f"{int(mm):02d}-{int(dd):02d}"
+        except Exception:
+            norm = ""
     if len(norm) >= 8 and norm[:2] in ("19", "20"):
         norm = norm[5:]  # '2026-10-14' -> '10-14'
     p = norm.split("-")
@@ -748,13 +754,13 @@ def merge_facts(existing: str, incoming: str) -> str:
     out: dict = {}  # key -> [line, norm_date]
     for line in existing.strip().splitlines():
         line = line.strip()
-        if not line:
-            continue
+        if not line or line in ("【事实】", "【猜测】"):
+            continue  # 分节标题行不进清单
         k, d = _fact_key_date(line)
         out[k] = [line, d]
     for line in incoming.strip().splitlines():
         line = line.strip()
-        if not line:
+        if not line or line in ("【事实】", "【猜测】"):
             continue
         k, d = _fact_key_date(line)
         if k in out:
@@ -766,8 +772,44 @@ def merge_facts(existing: str, incoming: str) -> str:
     return "\n".join(v[0] for v in out.values())
 
 
-def start_profile_task() -> dict:
-    """启动画像总结后台任务（同一时间只允许一个）。立即返回，进度靠轮询。"""
+# 成稿小节的维度顺序（排序用；按画像小节从外貌到其他排列）
+_DIM_ORDER = ("外貌", "性格", "情绪", "说话方式", "口癖", "在意", "雷点", "哄TA", "哄她", "哄他",
+              "爱好", "品味", "习惯", "作息", "生活状态", "在忙", "身边的人", "态度", "期待",
+              "xp", "XP", "其他")
+
+
+def _sort_facts_for_compose(facts: str) -> str:
+    """成稿前整理清单：按维度分组、组内依据日期从老到新排列。
+
+    让成稿层一眼看出每个维度"最靠后的那条就是最新的"（可变项以最近为准），
+    防止它在一长串混杂清单里抓错日期、把老的生活状态写进画像。"""
+    rows, extras = [], []
+    for line in (facts or "").strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        seg = line.split("|")
+        if len(seg) >= 3 and _FACT_DATE_RE.search(seg[-1]):
+            k, d = _fact_key_date(line)
+            rows.append((seg[0].strip(), d or "00-00", line))
+        else:
+            extras.append(line)
+
+    def dim_rank(dim: str) -> int:
+        for i, tag in enumerate(_DIM_ORDER):
+            if tag in dim:
+                return i
+        return len(_DIM_ORDER)
+
+    rows.sort(key=lambda t: (dim_rank(t[0]), t[1]))
+    return "\n".join(extras + [r[2] for r in rows])
+
+
+def start_profile_task(force: bool = False) -> dict:
+    """启动画像总结后台任务（同一时间只允许一个）。立即返回，进度靠轮询。
+
+    force=True：全量重跑——无视已有画像与断点，从第一条消息重新提取、空白画像重新成稿
+    （画像写得不满意/太旧时用；普通模式只做增量，旧画像会被当底子保留）。"""
     if _profile_state.get("running"):
         return {"ok": False, "error": "画像总结已在运行中，等它跑完（进度见 /admin/profile_status）"}
     if not config.supabase_ready():
@@ -779,12 +821,16 @@ def start_profile_task() -> dict:
         "error": "", "chars": 0,
         "started_at": _now().isoformat(timespec="seconds"), "finished_at": "",
     })
-    asyncio.create_task(_profile_run())
-    return {"ok": True, "hint": "画像总结已启动。首次全量要跑一阵（几万条消息分批并发提取），可用 /admin/profile_status 轮询进度"}
+    asyncio.create_task(_profile_run(force))
+    hint = ("全量重跑已启动：忽略已有画像与断点，从头重新提取全部消息，可用 /admin/profile_status 轮询进度"
+            if force else
+            "画像总结已启动。首次全量要跑一阵（几万条消息分批并发提取），可用 /admin/profile_status 轮询进度")
+    return {"ok": True, "hint": hint}
 
 
-async def _profile_run():
+async def _profile_run(force: bool = False):
     """画像主流程：定位断点 → 拉新消息 → 分批提取事实 → 成稿存库。
+    force=True：无视已有画像与断点，从头全量重提、空白画像重新成稿。
 
     断点续传：
     - profile 行 meta.checkpoint = 上次成稿完成时最后处理到的消息时间戳
@@ -801,18 +847,23 @@ async def _profile_run():
                 base_cp = str(json.loads(profile_row.get("meta") or "{}").get("checkpoint") or "")
             except Exception:
                 base_cp = ""
-        saved_ts, facts = "", ""
-        try:
-            saved = json.loads(await store.get_state("profile_extract") or "{}")
-            saved_ts = str(saved.get("ts") or "")
-            facts = str(saved.get("facts") or "")
-        except Exception:
-            saved_ts, facts = "", ""
-        # 上次提取中途断掉（断点比已存画像新）→ 续跑，事实清单接着用
-        resume = bool(saved_ts) and (not base_cp or saved_ts >= base_cp)
+        saved_ts, facts, resume = "", "", False
+        if force:
+            # 全量重跑：推倒重来，不继承任何旧状态
+            old_profile, base_cp = "", ""
+            await store.set_memory("state", "profile_extract", "", {})
+        else:
+            try:
+                saved = json.loads(await store.get_state("profile_extract") or "{}")
+                saved_ts = str(saved.get("ts") or "")
+                facts = str(saved.get("facts") or "")
+            except Exception:
+                saved_ts, facts = "", ""
+            # 上次提取中途断掉（断点比已存画像新）→ 续跑，事实清单接着用
+            resume = bool(saved_ts) and (not base_cp or saved_ts >= base_cp)
+            if not resume:
+                facts = ""
         start_ts = saved_ts if resume else base_cp
-        if not resume:
-            facts = ""
 
         rows = await store.fetch_chats_after(start_ts)
         rows = [r for r in rows
@@ -859,11 +910,13 @@ async def _profile_run():
             await store.set_memory("state", "profile_extract", "", {})
             return
         final_cp = str(rows[-1].get("created_at") or "") if rows else (start_ts or base_cp)
-        text = await summarizer.compose_profile(facts, old_profile)
+        text = await summarizer.compose_profile(_sort_facts_for_compose(facts), old_profile)
         if not text.strip():
             raise RuntimeError("成稿层返回了空画像（旧画像未动）")
         await store.set_memory("profile", "", text,
                                 {"checkpoint": final_cp, "source": "profile_summarize"})
+        # 事实清单留档（state 行，只按需显式读取，不影响注入）：排查画像内容用
+        await store.set_memory("state", "profile_facts", facts[-50000:], {})
         await store.set_memory("state", "profile_extract", "", {})  # 清断点
         st.update(phase="done", chars=len(text), error="")
         log.info("宝宝画像已生成：%d 字（本轮处理 %d 条消息）", len(text), total)
