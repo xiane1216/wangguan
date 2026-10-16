@@ -713,6 +713,59 @@ def profile_status() -> dict:
     return dict(_profile_state)
 
 
+_FACT_DATE_RE = re.compile(r"(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}-\d{1,2})")
+
+
+def _fact_key_date(line: str) -> tuple:
+    """一行 '维度 | 内容 | 依据日期' → (去重键, 归一日期)。日期归一成 MM-DD 便于比较。"""
+    seg = [p.strip() for p in line.split("|")]
+    if len(seg) >= 3:
+        key, raw_date = seg[0] + "|" + seg[1], seg[2]
+    else:
+        key, raw_date = line, ""
+    m = _FACT_DATE_RE.search(raw_date)
+    norm = m.group(1) if m else ""
+    if len(norm) >= 8 and norm[:2] in ("19", "20"):
+        norm = norm[5:]  # '2026-10-14' -> '10-14'
+    p = norm.split("-")
+    if len(p) == 2:
+        try:
+            norm = f"{int(p[0]):02d}-{int(p[1]):02d}"
+        except Exception:
+            pass
+    return key, norm
+
+
+def merge_facts(existing: str, incoming: str) -> str:
+    """合并两段事实清单：按 维度+内容 去重，同事实只留依据日期更新的一条（以最近为主）。
+
+    184 批下来稳定事实（口癖/偏好）会反复出现，不去重清单会越滚越大，
+    最后成稿层输入可能撑爆上下文。"""
+    if not (existing or "").strip():
+        return (incoming or "").strip()
+    if not (incoming or "").strip():
+        return existing.strip()
+    out: dict = {}  # key -> [line, norm_date]
+    for line in existing.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        k, d = _fact_key_date(line)
+        out[k] = [line, d]
+    for line in incoming.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        k, d = _fact_key_date(line)
+        if k in out:
+            old = out[k][1]
+            if not old or (d and d >= old):  # 同事实保留更近的依据日期
+                out[k] = [line, d]
+        else:
+            out[k] = [line, d]
+    return "\n".join(v[0] for v in out.values())
+
+
 def start_profile_task() -> dict:
     """启动画像总结后台任务（同一时间只允许一个）。立即返回，进度靠轮询。"""
     if _profile_state.get("running"):
@@ -792,7 +845,7 @@ async def _profile_run():
             # 本波全部成功才并入清单 + 推进断点（挂掉重跑最多损失一波）
             for i in idxs:
                 if parts[i]:
-                    facts = (facts + "\n" + parts[i]).strip() if facts else parts[i]
+                    facts = merge_facts(facts, parts[i])
             last_ts = str(waves[idxs[-1]][-1].get("created_at") or "")
             # 断点实时落库：任何点挂掉，重跑只补未完成的那一波
             await store.set_memory("state", "profile_extract",

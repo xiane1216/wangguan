@@ -428,8 +428,17 @@ def _profile_transcript(rows: list, clip: int = 1500) -> str:
     return "\n".join(out)
 
 
+_EXTRACT_RETRY_SUFFIX = ("\n\n注意：你上一次的输出太长、超过上限被截断了。这次必须狠压："
+                        "【事实】最多10条、【猜测】最多2条，每条连维度不超过40字，只挑最有价值的。"
+                        "第一行仍必须输出「提取开始」")
+
+
 async def extract_profile_facts(rows: list) -> str:
-    """提取层：一批消息 → 关于用户的稳定事实清单。该批无可提取内容时返回空串。"""
+    """提取层：一批消息 → 关于用户的稳定事实清单。该批无可提取内容时返回空串。
+
+    某批输出超长被截断时的降级链（一批超长绝不该让整个任务挂掉）：
+    重试一次（要求更狠地压缩）→ 仍截断则放弃 strict，收下标记后的部分结果
+    （截断只是少几条事实，行级去重 + 硬截断兜底，不会混进垃圾）。"""
     text = _profile_transcript(rows)
     if not text.strip():
         return ""
@@ -438,20 +447,57 @@ async def extract_profile_facts(rows: list) -> str:
         ai_label=config.AI_LABEL,
         transcript=text,
     )
-    raw = await _chat(
-        [{"role": "user", "content": prompt}],
-        config.PROFILE_EXTRACT_MAX_TOKENS,
-        config.SUMMARY_TEMPERATURE,
-        strict_full=True,  # 事实清单被 max_tokens 截断 = 断在一半，宁可报错重跑该批
-    )
+    raw = ""
+    try:
+        raw = await _chat(
+            [{"role": "user", "content": prompt}],
+            config.PROFILE_EXTRACT_MAX_TOKENS,
+            config.SUMMARY_TEMPERATURE,
+            strict_full=True,  # 事实清单被 max_tokens 截断 = 断在一半，先拦下重试
+        )
+    except RuntimeError as exc:
+        if "被截断" not in str(exc):
+            raise
+        log.warning("画像提取输出被截断，压缩后重试该批")
+        try:
+            raw = await _chat(
+                [{"role": "user", "content": prompt + _EXTRACT_RETRY_SUFFIX}],
+                config.PROFILE_EXTRACT_MAX_TOKENS,
+                config.SUMMARY_TEMPERATURE,
+                strict_full=True,
+            )
+        except RuntimeError as exc2:
+            if "被截断" not in str(exc2):
+                raise
+            log.warning("画像提取重试仍截断，降级收下部分结果")
+            raw = await _chat(
+                [{"role": "user", "content": prompt + _EXTRACT_RETRY_SUFFIX}],
+                config.PROFILE_EXTRACT_MAX_TOKENS,
+                config.SUMMARY_TEMPERATURE,
+            )
     facts = _cut_between(raw, _EXTRACT_OPEN)
     if not facts or facts.strip() == "无":
         return ""
-    return facts.strip()
+    # 行级去重：模型复读/循环时同一行会重复出现
+    seen, uniq = set(), []
+    for line in facts.strip().splitlines():
+        line = line.strip()
+        if line and line != "无" and line not in seen:
+            seen.add(line)
+            uniq.append(line)
+    return _hard_cap("\n".join(uniq), 2000)
+
+
+_COMPOSE_RETRY_SUFFIX = ("\n\n注意：你上一次的输出超过长度上限被截断了。这次必须更精简："
+                         "每节最多5条、每条不超过30字，没素材的小节直接跳过。"
+                         "第一行仍必须是「画像开始」，最后一行「画像结束」。")
 
 
 async def compose_profile(facts: str, existing_profile: str = "") -> str:
-    """成稿层：事实清单（+已有旧画像）→ 画像全文。只见清单不见原文，无原料可编。"""
+    """成稿层：事实清单（+已有旧画像）→ 画像全文。只见清单不见原文，无原料可编。
+
+    输出超长同样降级：重试一次（更精简）→ 仍截断则收下「画像开始」后的部分
+    （丢的是尾部小节，绝不因此让整个任务反复失败）。"""
     prompt = prompts.PROFILE_COMPOSE.format(
         user_label=config.USER_LABEL,
         ai_label=config.AI_LABEL,
@@ -459,10 +505,32 @@ async def compose_profile(facts: str, existing_profile: str = "") -> str:
         facts=facts.strip(),
         profile=(existing_profile or "").strip(),
     )
-    raw = await _chat(
-        [{"role": "user", "content": prompt}],
-        config.PROFILE_COMPOSE_MAX_TOKENS,
-        config.SUMMARY_TEMPERATURE,
-        strict_full=True,
-    )
+    raw = ""
+    try:
+        raw = await _chat(
+            [{"role": "user", "content": prompt}],
+            config.PROFILE_COMPOSE_MAX_TOKENS,
+            config.SUMMARY_TEMPERATURE,
+            strict_full=True,
+        )
+    except RuntimeError as exc:
+        if "被截断" not in str(exc):
+            raise
+        log.warning("画像成稿输出被截断，精简后重试")
+        try:
+            raw = await _chat(
+                [{"role": "user", "content": prompt + _COMPOSE_RETRY_SUFFIX}],
+                config.PROFILE_COMPOSE_MAX_TOKENS,
+                config.SUMMARY_TEMPERATURE,
+                strict_full=True,
+            )
+        except RuntimeError as exc2:
+            if "被截断" not in str(exc2):
+                raise
+            log.warning("画像成稿重试仍截断，降级收下部分画像")
+            raw = await _chat(
+                [{"role": "user", "content": prompt + _COMPOSE_RETRY_SUFFIX}],
+                config.PROFILE_COMPOSE_MAX_TOKENS,
+                config.SUMMARY_TEMPERATURE,
+            )
     return _hard_cap(_cut_between(raw, _PROFILE_OPEN, _PROFILE_CLOSE), config.PROFILE_MAX_CHARS)
