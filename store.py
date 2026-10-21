@@ -7,6 +7,7 @@
 import json
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import httpx
 
@@ -111,7 +112,10 @@ async def fetch_chats_after(after_ts: str = "", limit: int = 200000) -> list:
     if config.ASSISTANT_ID:
         base += f"&assistant_id=eq.{config.ASSISTANT_ID}"
     if (after_ts or "").strip():
-        base += f"&created_at=gte.{after_ts.strip()}"
+        # 必须对时间戳做 URL 编码：从库里读出的断点形如 "2026-10-16T12:18:17+00:00"，
+        # URL 里的裸 '+' 会被服务端解码成空格 → Postgres 收到 "...17 00:00" 报 22007
+        # invalid input syntax（增量画像首次跑就 400、拉到 0 条、画像悄悄不更新的根因）
+        base += f"&created_at=gte.{quote(after_ts.strip(), safe='')}"
     out, offset = [], 0
     while offset < limit:
         rows = await _sb_get(config.CHAT_TABLE, f"{base}&limit=1000&offset={offset}")
