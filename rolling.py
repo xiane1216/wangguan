@@ -27,8 +27,16 @@ _TALK_ROLES = ("user", "assistant")
 
 
 def _key(system_text: str, first_user: str) -> str:
-    raw = (system_text or "") + "\x00" + (first_user or "")
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    """滚动摘要缓存键：只用第一条用户消息（对话锚点），不掺 system 文本。
+
+    原因：App 的心跳和正常聊天共用同一段对话历史（first_user 相同），但 system
+    是两套（心跳版多一段「## 规则」）。system 参与键时，聊天和心跳各自养了一份
+    独立摘要、各自总结：心跳触发时发现自己那份落后于聊天进度 → 现场重补摘要 →
+    提示词变化 → DeepSeek 前缀缓存全 miss（"不回复触发心跳就全 miss"的根因）。
+    键与 memory._window_key 对齐后，聊天把摘要更新到最新，心跳直接复用，
+    不再重补、不再 miss。摘要内容/触发条件/保留条数全部不变。
+    """
+    return hashlib.sha256((first_user or "").encode("utf-8")).hexdigest()[:16]
 
 
 def _split(messages):
