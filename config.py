@@ -45,6 +45,7 @@ REFRESH_HOURS = _float("REFRESH_HOURS", 2.0)             # 自动总结刷新周
 LAST_WINDOW_MESSAGES = _int("LAST_WINDOW_MESSAGES", 20)  # "上个窗口原始聊天记录"条数
 MAX_BACKFILL_DAYS = _int("MAX_BACKFILL_DAYS", 30)        # 首次部署最多往回总结多少天历史
 LONGTERM_MAX_CHARS = _int("LONGTERM_MAX_CHARS", 2000)    # 长期记忆全文上限（字）
+RETIRE_LONGTERM = os.environ.get("RETIRE_LONGTERM", "0") == "1"  # 退役长期记忆：注入时跳过、刷新时不再合并（库里的数据原样保留）
 TIMEZONE = os.environ.get("TIMEZONE", "Asia/Shanghai")
 USER_LABEL = os.environ.get("USER_LABEL", "宝宝")  # 记忆里对用户的称呼
 AI_LABEL = os.environ.get("AI_LABEL", "我")          # 记录里 AI 的自称（第一人称）

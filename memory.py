@@ -154,7 +154,7 @@ def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_r
                 seg.append(f"〔{y.get('scope', '')}〕\n{c}")
         if seg:
             parts.append("=== 四、年度概览 ===\n" + "\n\n".join(reversed(seg)))
-    if (longterm or "").strip():
+    if (longterm or "").strip() and not config.RETIRE_LONGTERM:
         parts.append("=== 五、长期记忆（更早的历史兜底） ===\n" + longterm.strip())
     if (profile or "").strip():
         # 宝宝画像：长期记忆之后、最近原文之前；免责声明装配时追加，不存库。
@@ -424,7 +424,8 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             stats["days_archived"].append(str(day))
 
     # 3) 长期记忆：把"还没合并过"的粗略归档合并成"这个月的大概"（旧逻辑兜底）。
-    if not stats.get("aborted"):
+    #    RETIRE_LONGTERM=1 时整个跳过：长期记忆退役后，rough 的内容由月/季/年概览继承。
+    if not stats.get("aborted") and not config.RETIRE_LONGTERM:
         try:
             rough_rows = await store.get_all_roughs(limit=400)
         except Exception:
