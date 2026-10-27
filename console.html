@@ -185,7 +185,7 @@ dialog h3{font-size:18px;margin-bottom:16px}
       <h2>🏮 年度概览（年） <span class="badge" id="yearlyBadge">—</span></h2>
       <div id="yearliesView" class="muted">尚未加载</div>
     </div>
-    <div class="card">
+    <div class="card" id="ltCard">
       <h2>📚 长期记忆（历史兜底） <span class="badge" id="ltBadge">—</span></h2>
       <pre class="mono" id="ltView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
     </div>
@@ -246,7 +246,7 @@ dialog h3{font-size:18px;margin-bottom:16px}
       </div>
       <div id="profileRunResult" style="margin-top:10px"></div>
     </div>
-    <div class="card">
+    <div class="card" id="restyleCard">
       <h2>长期记忆改写</h2>
       <p class="muted" style="margin-bottom:10px">把旧格式长期记忆改写为第一人称叙述。</p>
       <button class="btn sm" onclick="runRestyle()">改写</button>
@@ -337,12 +337,13 @@ async function loadStatus(){
     const items=[
       ['DeepSeek',j.deepseek_configured?'已配置':'未配置',j.deepseek_configured?'green':'red'],
       ['Supabase',j.supabase_configured?'已配置':'未配置',j.supabase_configured?'green':'red'],
-      ['长期记忆',j.longterm_chars!=null?j.longterm_chars+' 字':'—',''],
+      ['长期记忆',j.retire_longterm?'已退役':(j.longterm_chars!=null?j.longterm_chars+' 字':'—'),j.retire_longterm?'':''],
       ['缓存窗口',j.cached_windows+' 个',''],
       ['总结模型',j.summary_model||'—',''],
       ['上次刷新',j.last_refresh?j.last_refresh.slice(0,16):'从未',''],
     ];
     $('statGrid').innerHTML=items.map(([l,v,t])=>`<div class="stat"><div class="stat-label">${l}</div><div class="stat-value">${t?`<span class="tag ${t}">${v}</span>`:v}</div></div>`).join('');
+    if(j.retire_longterm){const c=$('ltCard');if(c)c.style.display='none';const r=$('restyleCard');if(r)r.style.display='none';}
     if(j.recent_daily&&j.recent_daily.length)$('dailiesView').innerHTML=j.recent_daily.map(d=>`<div class="row" style="margin-bottom:6px"><span class="tag">${d.date}</span><span class="muted">${d.chars} 字</span></div>`).join('');
   }catch(e){$('dot').classList.remove('on');$('sub').textContent='连接失败';$('statGrid').innerHTML='<div class="muted" style="color:var(--red)">'+e.message+'</div>'}
 }
@@ -357,8 +358,8 @@ function renderMemoryList(viewId,badgeId,items,scopeKey){
 async function loadMemory(){
   try{
     const d=await api('/admin/memory');
-    $('ltBadge').textContent=(d.longterm_chars||0)+' 字';
-    $('ltView').textContent=d.longterm||'(空)';
+    if(d.retire_longterm){const c=$('ltCard');if(c)c.style.display='none';const r=$('restyleCard');if(r)r.style.display='none';}
+    else{$('ltBadge').textContent=(d.longterm_chars||0)+' 字';$('ltView').textContent=d.longterm||'(空)';}
     $('profileBadge').textContent=(d.profile_chars||0)+' 字';
     $('profileView').textContent=d.profile||'(还没有画像，去工具页点「总结宝宝画像」)';
     renderMemoryList('dailiesView','dailyBadge',d.recent_daily,'date');
