@@ -600,9 +600,15 @@ async def _rollup_layers(today) -> dict:
                     await store.set_memory("monthly", m, monthly, {"source": "monthly_in_progress"})
                     stats["months_rolled"].append(m)
             else:
-                # 已结束的月：一次性生成，只做一次
-                if await store.get_memory("monthly", m):
-                    continue
+                # 已结束的月：定稿一次，之后不再动。
+                # 例外：若现存的是"进行中版本"（月末最后一天的日总结来不及进月概览），
+                # 月初第一次滚动时原料已齐（归档在滚动之前），补一次定稿把尾巴收进去。
+                existing = await store.get_memory("monthly", m)
+                if existing:
+                    src = ((existing.get("meta") or {}).get("source") or "")
+                    if src != "monthly_in_progress":
+                        continue
+                    log.info("月概览 %s 仍是进行中版本，月初补定稿", m)
                 try:
                     monthly = await summarizer.summarize_month(m, texts)
                 except Exception:
