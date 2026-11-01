@@ -54,3 +54,37 @@ async def call_tool(tool: str, args: dict) -> str:
 async def fetch_breath() -> str:
     """原样取回 OB 的浮现记忆 + 核心准则（逐字内容，不做任何加工）。"""
     return await call_tool("breath", {})
+
+
+async def fetch_core_rules() -> list[str]:
+    """只拉核心准则订桶（pinned/protected，逐字正文，全程 0 LLM）。
+
+    breath_advanced 不带 query 走浮现模式：pinned 桶全部置顶渲染为
+    「📌 [核心准则] [bucket_id:xxx] + 逐字正文」，importance_min=10 把
+    普通动态桶挡在后面。max_tokens 给足以免预算截断（20 桶约几千 token）。
+    返回每条订桶的逐字内容列表。
+    """
+    raw = await call_tool("breath_advanced", {
+        "query": "", "importance_min": 10, "max_tokens": 30000,
+    })
+    items: list[str] = []
+    cur: list[str] = []
+    started = False
+    for line in (raw or "").splitlines():
+        if "[核心准则]" in line:
+            if any(s.strip() for s in cur):
+                items.append("\n".join(cur).strip("\n"))
+            # 剥掉行内的元数据边界标记，只留 meaning/正文
+            body = line.split("[instructions:false]", 1)
+            tail = body[1] if len(body) > 1 else ""
+            cur = [tail] if tail.strip() else []
+            started = True
+        elif started:
+            # 撞到普通浮现/久未浮现/偶遇段或统计标题 → 核心准则段结束
+            if (line.startswith("[权重:") or line.startswith("💤")
+                    or line.startswith("✨") or line.startswith("===")):
+                break
+            cur.append(line)
+    if any(s.strip() for s in cur):
+        items.append("\n".join(cur).strip("\n"))
+    return [it for it in items if it.strip()]

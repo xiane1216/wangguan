@@ -266,10 +266,14 @@ async def admin_memory(request: Request):
     last_errors = await store.get_state("last_errors")
     profile_row = await store.get_memory("profile", "")
     profile = (profile_row or {}).get("content") or "" if profile_row else None
+    rules_row = await store.get_memory("core_rules", "")
+    core_rules = (rules_row or {}).get("content") or "" if rules_row else None
     return JSONResponse({
         "longterm": longterm,
         "profile": profile,
         "profile_chars": len(profile or ""),
+        "core_rules": core_rules,
+        "core_rules_chars": len(core_rules or ""),
         "last_errors": last_errors,
         "longterm_chars": len((longterm or "").strip()),
         "retire_longterm": config.RETIRE_LONGTERM,
@@ -360,6 +364,14 @@ async def admin_profile_status(request: Request):
     if not _check_admin(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return JSONResponse(memory.profile_status(), headers={"Cache-Control": "no-store"})
+
+
+async def admin_import_core_rules(request: Request):
+    """从 OB 手动拉取核心准则订桶（逐字，0 LLM），存为「我们的约定」独立模块。"""
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    result = await memory.import_core_rules()
+    return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 
 async def admin_import_ob(request: Request):
@@ -467,6 +479,7 @@ app = Starlette(routes=[
     Route("/admin/profile_summarize", admin_profile_summarize, methods=["GET", "POST"]),
     Route("/admin/profile_status", admin_profile_status, methods=["GET"]),
     Route("/admin/import_ob", admin_import_ob, methods=["GET", "POST"]),
+    Route("/admin/import_core_rules", admin_import_core_rules, methods=["GET", "POST"]),
     Route("/admin/preview", admin_preview, methods=["GET"]),
     Route("/debug/xray", debug_xray, methods=["GET"]),
 ], lifespan=lifespan)

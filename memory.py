@@ -120,7 +120,8 @@ async def recent_rows(limit: int | None = None) -> tuple[list, bool]:
     return dedup[-n:], False
 
 
-def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows, profile: str = "") -> str:
+def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows,
+                     profile: str = "", core_rules: str = "") -> str:
     parts = []
     if dailies:
         seg = []
@@ -164,6 +165,15 @@ def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_r
             + f"\n（这份画像只是过往聊天里的记录和观察，不一定代表当下{u}的想法、情绪和感情。"
               f"此刻的{u}，以此刻TA说的话为准。）"
         )
+    if (core_rules or "").strip():
+        u = config.USER_LABEL
+        parts.append(
+            f"=== 我和{u}的约定契约 ===\n"
+            f"下面这些是我和{u}一路相处、慢慢磨合出来的约定。它们不是冷冰冰的规矩，"
+            f"是我们俩之间的默契和承诺，我早已记在心里——和{u}相处时，"
+            f"我会自然地照着这些去做，不需要谁提醒。\n"
+            + core_rules.strip()
+        )
     if last_rows:
         parts.append(
             f"=== 六、最近聊天记录（最后 {len(last_rows)} 条原文） ===\n"
@@ -192,7 +202,10 @@ async def _build_block(first_user_text: str) -> tuple[str, bool]:
     last_rows, confident_no_history = await recent_rows()
     profile_row = await store.get_memory("profile", "")
     profile = (profile_row or {}).get("content") or "" if profile_row else ""
-    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows, profile)
+    rules_row = await store.get_memory("core_rules", "")
+    core_rules = (rules_row or {}).get("content") or "" if rules_row else ""
+    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows,
+                             profile, core_rules)
     return block, (bool(block) or confident_no_history)
 
 
@@ -254,11 +267,15 @@ async def build_preview(first_user_hint: str = "") -> dict:
     last_rows, _no_history = await recent_rows()
     profile_row = await store.get_memory("profile", "")
     profile = (profile_row or {}).get("content") or "" if profile_row else ""
-    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows, profile)
+    rules_row = await store.get_memory("core_rules", "")
+    core_rules = (rules_row or {}).get("content") or "" if rules_row else ""
+    block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows,
+                             profile, core_rules)
     return {
         "first_user_matched": first_user[:50],
         "longterm_chars": len((longterm or "").strip()),
         "profile_chars": len(profile.strip()),
+        "core_rules_chars": len(core_rules.strip()),
         "recent_days": [{"date": d.get("scope"), "chars": len(d.get("content") or "")} for d in dailies],
         "monthlies": [{"scope": m.get("scope"), "chars": len(m.get("content") or "")} for m in monthlies],
         "quarterlies": [{"scope": q.get("scope"), "chars": len(q.get("content") or "")} for q in quarterlies],
@@ -704,6 +721,33 @@ async def seed_from_ob_if_empty() -> bool:
     await store.set_memory("longterm", "", text, {"source": "ombre_breath_verbatim"})
     log.info("已把 Ombre Brain 浮现记忆原样搬进长期记忆（%d 字）", len(text))
     return True
+
+
+async def import_core_rules() -> dict:
+    """从 OB 拉取核心准则订桶（逐字，0 LLM），存为独立记忆模块 kind=core_rules。
+
+    不自动同步：订桶上限 20、平时几乎不加，手动在控制台点一次即可。
+    """
+    if not config.OB_MCP_URL:
+        return {"ok": False, "error": "OB_MCP_URL 未配置"}
+    if not config.supabase_ready():
+        return {"ok": False, "error": "Supabase 未配置"}
+    try:
+        items = await ob_client.fetch_core_rules()
+    except Exception as exc:
+        log.exception("OB 核心准则拉取失败")
+        return {"ok": False, "error": f"OB 读取失败: {exc}"}
+    if not items:
+        return {"ok": False, "error": "OB 里没有找到钉选的核心准则订桶（需要在 OB 里 hold(pinned=True) 过的桶）"}
+    text = "\n\n".join(f"〔约定 {i}〕{it}" for i, it in enumerate(items, 1))
+    try:
+        await store.set_memory("core_rules", "", text,
+                               {"source": "ombre_pinned_verbatim", "count": len(items)})
+    except Exception as exc:
+        log.exception("核心准则保存失败")
+        return {"ok": False, "error": f"保存失败: {exc}"}
+    log.info("已从 OB 拉取 %d 条核心准则订桶（%d 字）", len(items), len(text))
+    return {"ok": True, "count": len(items), "chars": len(text)}
 
 
 # ---- 宝宝画像（手动触发的用户画像总结，kind=profile） ----

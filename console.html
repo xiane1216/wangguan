@@ -194,6 +194,11 @@ dialog h3{font-size:18px;margin-bottom:16px}
       <p class="muted" style="margin-bottom:10px">从全部聊天记录里总结的、对宝宝的长期认知。注入时会自动附上免责声明（过往观察，不代表当下）。在工具页手动生成/更新。</p>
       <pre class="mono" id="profileView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
     </div>
+    <div class="card">
+      <h2>💞 我和宝宝的约定契约 <span class="badge" id="rulesBadge">—</span></h2>
+      <p class="muted" style="margin-bottom:10px">从 Ombre Brain 钉选订桶逐字搬来的核心准则，以「我和宝宝的约定契约」为名随开窗注入（他的第一人称视角）。在工具页手动拉取更新。</p>
+      <pre class="mono" id="rulesView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
+    </div>
     <div class="row" style="margin-bottom:14px">
       <button class="btn sm" onclick="loadMemory()">刷新记忆</button>
     </div>
@@ -260,6 +265,12 @@ dialog h3{font-size:18px;margin-bottom:16px}
         <button class="btn sm" onclick="runImportOB('replace')">强制覆盖</button>
       </div>
       <div id="obResult" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>拉取约定契约 <span class="badge">逐字</span></h2>
+      <p class="muted" style="margin-bottom:10px">从 OB 只拉钉选的核心准则订桶（不用模型、不改写），存成「我和宝宝的约定契约」记忆模块随开窗注入。订桶平时不加，改了再点一次即可。</p>
+      <button class="btn sm primary" id="rulesBtn" onclick="runImportRules()">拉取核心准则订桶</button>
+      <div id="rulesResult" class="muted" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -362,6 +373,8 @@ async function loadMemory(){
     else{$('ltBadge').textContent=(d.longterm_chars||0)+' 字';$('ltView').textContent=d.longterm||'(空)';}
     $('profileBadge').textContent=(d.profile_chars||0)+' 字';
     $('profileView').textContent=d.profile||'(还没有画像，去工具页点「总结宝宝画像」)';
+    $('rulesBadge').textContent=(d.core_rules_chars||0)+' 字';
+    $('rulesView').textContent=d.core_rules||'(还没有约定契约，去工具页点「拉取核心准则订桶」)';
     renderMemoryList('dailiesView','dailyBadge',d.recent_daily,'date');
     renderMemoryList('monthliesView','monthlyBadge',d.monthlies,'scope');
     renderMemoryList('quarterliesView','quarterlyBadge',d.quarterlies,'scope');
@@ -469,6 +482,20 @@ async function runImportOB(mode){
     const d=await api('/admin/import_ob?mode='+mode,{method:'POST'});
     $('obResult').innerHTML='<span class="tag green">完成</span> '+esc(JSON.stringify(d));
   }catch(e){$('obResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+}
+async function runImportRules(){
+  const btn=$('rulesBtn');btn.disabled=true;
+  $('rulesResult').innerHTML='<span class="spin"></span> 正在从 OB 拉取核心准则订桶（逐字，约几秒）...';
+  try{
+    const d=await api('/admin/import_core_rules',{method:'POST'});
+    if(d.ok){
+      $('rulesResult').innerHTML='<span class="tag green">完成</span> 拉到 '+d.count+' 条约定，共 '+d.chars+' 字，已注入模块「我和宝宝的约定契约」';
+      loadMemory();
+    }else{
+      $('rulesResult').innerHTML='<span class="tag red">失败</span> '+esc(d.error||'未知错误');
+    }
+  }catch(e){$('rulesResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+  btn.disabled=false;
 }
 
 // xray
