@@ -733,7 +733,7 @@ async def import_core_rules() -> dict:
     if not config.supabase_ready():
         return {"ok": False, "error": "Supabase 未配置"}
     try:
-        items = await ob_client.fetch_core_rules()
+        items, missing = await ob_client.fetch_core_rules()
     except Exception as exc:
         log.exception("OB 核心准则拉取失败")
         return {"ok": False, "error": f"OB 读取失败: {exc}"}
@@ -747,7 +747,11 @@ async def import_core_rules() -> dict:
         log.exception("核心准则保存失败")
         return {"ok": False, "error": f"保存失败: {exc}"}
     log.info("已从 OB 拉取 %d 条核心准则订桶（%d 字）", len(items), len(text))
-    return {"ok": True, "count": len(items), "chars": len(text)}
+    result = {"ok": True, "count": len(items), "chars": len(text)}
+    if missing:
+        result["missing"] = missing
+        result["hint"] = f"有 {len(missing)} 条没能从 breath_search 取回正文，已跳过"
+    return result
 
 
 # ---- 宝宝画像（手动触发的用户画像总结，kind=profile） ----

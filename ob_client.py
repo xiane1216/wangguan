@@ -5,12 +5,17 @@
 """
 import json
 import logging
+import re
 
 import httpx
 
 import config
 
 log = logging.getLogger(__name__)
+
+_PIN_LINE = re.compile(r"^📌\s*\[([0-9a-f]+)\]")
+_NAME_RE = re.compile(r"《([^》]+)》")
+_DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}-\d{2}-\d{2}\s*")
 
 
 def _parse(text: str) -> dict:
@@ -51,40 +56,72 @@ async def call_tool(tool: str, args: dict) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def _extract_bucket(raw: str, bucket_id: str) -> str:
+    """从 breath_search 输出里抠出指定桶的逐字正文。
+
+    目标块形如：`📌 [核心准则] [bucket_id:<id>]` 行之后、`👣 Footprint` /
+    `---` / 下一桶头之前的所有行。没找到返回空串。
+    """
+    collecting = False
+    out: list[str] = []
+    for line in (raw or "").splitlines():
+        s = line.strip()
+        if not collecting:
+            if ("[核心准则]" in s and f"[bucket_id:{bucket_id}]" in s):
+                collecting = True
+            continue
+        if (s.startswith("👣 Footprint") or s == "---"
+                or "[bucket_id:" in s or s.startswith("===")):
+            break
+        out.append(line)
+    return "\n".join(out).strip("\n")
+
+
+async def fetch_core_rules() -> tuple[list[str], list[str]]:
+    """只拉核心准则订桶（pinned，逐字正文，全程 0 LLM）。
+
+    兼容线上 OB 版本（pulse 行有 📌 标记、breath_search 命中钉选桶时渲染
+    `📌 [核心准则] [bucket_id:xxx]` + 逐字正文）：
+      1. pulse 列出全部钉选桶 id 与名称
+      2. 逐桶用名称主题词 breath_search，按 bucket_id 精确匹配提取正文
+    返回 (成功列表, 未取回的桶名列表)。
+    """
+    pulse = await call_tool("pulse", {})
+    ids: list[str] = []
+    names: dict[str, str] = {}
+    for line in (pulse or "").splitlines():
+        m = _PIN_LINE.match(line.strip())
+        if not m:
+            continue
+        pid = m.group(1)
+        ids.append(pid)
+        nm = _NAME_RE.search(line)
+        names[pid] = nm.group(1) if nm else pid
+    if not ids:
+        return [], []
+
+    items: list[str] = []
+    missing: list[str] = []
+    for pid in ids:
+        name = names[pid]
+        q = _DATE_PREFIX.sub("", name).strip() or name
+        body = ""
+        for query in (q, name):  # 先用主题词搜，不行再退全名
+            try:
+                raw = await call_tool("breath_search", {"query": query})
+            except Exception as exc:
+                log.warning("breath_search(%s) 失败: %s", query, exc)
+                continue
+            body = _extract_bucket(raw, pid)
+            if body:
+                break
+        if body:
+            items.append(body)
+        else:
+            missing.append(name)
+    return items, missing
+
+
 async def fetch_breath() -> str:
     """原样取回 OB 的浮现记忆 + 核心准则（逐字内容，不做任何加工）。"""
     return await call_tool("breath", {})
-
-
-async def fetch_core_rules() -> list[str]:
-    """只拉核心准则订桶（pinned/protected，逐字正文，全程 0 LLM）。
-
-    breath_advanced 不带 query 走浮现模式：pinned 桶全部置顶渲染为
-    「📌 [核心准则] [bucket_id:xxx] + 逐字正文」，importance_min=10 把
-    普通动态桶挡在后面。max_tokens 给足以免预算截断（20 桶约几千 token）。
-    返回每条订桶的逐字内容列表。
-    """
-    raw = await call_tool("breath_advanced", {
-        "query": "", "importance_min": 10, "max_tokens": 30000,
-    })
-    items: list[str] = []
-    cur: list[str] = []
-    started = False
-    for line in (raw or "").splitlines():
-        if "[核心准则]" in line:
-            if any(s.strip() for s in cur):
-                items.append("\n".join(cur).strip("\n"))
-            # 剥掉行内的元数据边界标记，只留 meaning/正文
-            body = line.split("[instructions:false]", 1)
-            tail = body[1] if len(body) > 1 else ""
-            cur = [tail] if tail.strip() else []
-            started = True
-        elif started:
-            # 撞到普通浮现/久未浮现/偶遇段或统计标题 → 核心准则段结束
-            if (line.startswith("[权重:") or line.startswith("💤")
-                    or line.startswith("✨") or line.startswith("===")):
-                break
-            cur.append(line)
-    if any(s.strip() for s in cur):
-        items.append("\n".join(cur).strip("\n"))
-    return [it for it in items if it.strip()]
