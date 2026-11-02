@@ -199,6 +199,11 @@ dialog h3{font-size:18px;margin-bottom:16px}
       <p class="muted" style="margin-bottom:10px">从 Ombre Brain 钉选订桶逐字搬来的核心准则，以「我和宝宝的约定契约」为名随开窗注入（他的第一人称视角）。在工具页手动拉取更新。</p>
       <pre class="mono" id="rulesView" style="max-height:300px;overflow:auto;background:var(--bg2);padding:14px;border-radius:14px;border:1.5px solid var(--border)">尚未加载</pre>
     </div>
+    <div class="card">
+      <h2>✨ 我和宝宝的大事 <span class="badge" id="msBadge">—</span></h2>
+      <p class="muted" style="margin-bottom:10px">从聊天历史里识别出的关系里程碑（第一次的事、转折点、改变我们的事），随开窗注入。在工具页全量/增量识别；识别错的点右侧「删」。</p>
+      <div id="msView" class="muted">尚未加载</div>
+    </div>
     <div class="row" style="margin-bottom:14px">
       <button class="btn sm" onclick="loadMemory()">刷新记忆</button>
     </div>
@@ -271,6 +276,15 @@ dialog h3{font-size:18px;margin-bottom:16px}
       <p class="muted" style="margin-bottom:10px">从 OB 只拉钉选的核心准则订桶（不用模型、不改写），存成「我和宝宝的约定契约」记忆模块随开窗注入。订桶平时不加，改了再点一次即可。</p>
       <button class="btn sm primary" id="rulesBtn" onclick="runImportRules()">拉取核心准则订桶</button>
       <div id="rulesResult" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>总结大事 <span class="badge">里程碑识别</span></h2>
+      <p class="muted" style="margin-bottom:10px">从记忆归档里识别「我和宝宝的大事」：第一次的事、转折点、改变我们关系的事（不按事大事小，按关系意义）。第一次用点「全量识别」；之后每次记忆刷新会自动增量识别，也可手动点增量。全量会覆盖重写现有大事。</p>
+      <div class="row">
+        <button class="btn sm primary" id="msFullBtn" onclick="runMsScan('full')">全量识别（覆盖重写）</button>
+        <button class="btn sm" id="msIncBtn" onclick="runMsScan('incremental')">增量总结</button>
+      </div>
+      <div id="msScanResult" class="muted" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -375,6 +389,7 @@ async function loadMemory(){
     $('profileView').textContent=d.profile||'(还没有画像，去工具页点「总结宝宝画像」)';
     $('rulesBadge').textContent=(d.core_rules_chars||0)+' 字';
     $('rulesView').textContent=d.core_rules||'(还没有约定契约，去工具页点「拉取核心准则订桶」)';
+    renderMilestones(d.milestones);
     renderMemoryList('dailiesView','dailyBadge',d.recent_daily,'date');
     renderMemoryList('monthliesView','monthlyBadge',d.monthlies,'scope');
     renderMemoryList('quarterliesView','quarterlyBadge',d.quarterlies,'scope');
@@ -400,6 +415,49 @@ async function runRefresh(){
     const d=await api('/admin/refresh?days='+days,{method:'POST'});
     $('refreshResult').innerHTML='<span class="tag green">完成</span> '+esc(JSON.stringify(d));
   }catch(e){$('refreshResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+}
+// milestones（我和宝宝的大事）
+function renderMilestones(list){
+  const v=$('msView');if(!v)return;
+  if(!list||!list.length){v.innerHTML='<span class="muted">(还没有大事，去工具页点「全量识别」)</span>';$('msBadge').textContent='0 条';return}
+  const over=list.length>50;
+  $('msBadge').textContent=list.length+' 条'+(over?' ⚠':'');
+  v.innerHTML=list.map(m=>{
+    const d=(m.scope||'').slice(0,10),s=esc(m.scope||''),c=esc((m.content||'').replace(/\n/g,' '));
+    return `<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 12px;margin-bottom:8px;background:var(--bg2);border:1.5px solid var(--border);border-radius:12px">
+      <span class="muted mono" style="white-space:nowrap;font-size:12px;align-self:center">${d}</span>
+      <span style="flex:1;font-size:13px;line-height:1.55">${c}</span>
+      <button class="btn sm" style="padding:3px 10px;font-size:12px" onclick="delMilestone('${s}')">删</button>
+    </div>`;
+  }).join('');
+}
+async function runMsScan(mode){
+  const full=mode==='full';
+  if(full&&!confirm('全量识别会覆盖重写现有的大事记录（手动删过的也会被重新识别回来），确定？'))return;
+  $('msFullBtn').disabled=true;$('msIncBtn').disabled=true;
+  $('msScanResult').innerHTML='<span class="spin"></span> 识别中...（调用 DeepSeek，全量约需 1~2 分钟）';
+  try{
+    const d=await api('/admin/milestones/scan?mode='+mode,{method:'POST'});
+    if(d.ok){
+      let msg='';
+      if(d.count!=null)msg='识别出 '+d.count+' 条大事'+(d.deleted_old?'（清掉旧记录 '+d.deleted_old+' 条）':'');
+      else if(d.written!=null)msg='新增 '+d.written+' 条，更新 '+d.updated+' 条';
+      else if(d.skipped)msg=d.skipped;
+      else if(d.hint)msg=d.hint;
+      $('msScanResult').innerHTML='<span class="tag green">完成</span> '+esc(msg)+(d.warning?' <span class="tag red" style="margin-left:6px">'+esc(d.warning)+'</span>':'');
+      loadMemory();
+    }else{
+      $('msScanResult').innerHTML='<span class="tag red">失败</span> '+esc(d.error||'未知错误');
+    }
+  }catch(e){$('msScanResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+  $('msFullBtn').disabled=false;$('msIncBtn').disabled=false;
+}
+async function delMilestone(scope){
+  if(!confirm('删除这条大事记录？'+scope))return;
+  try{
+    const d=await api('/admin/milestones/delete?scope='+encodeURIComponent(scope),{method:'POST'});
+    if(d.ok){loadMemory()}else{alert(d.error||'删除失败')}
+  }catch(e){alert('删除失败: '+e.message)}
 }
 // regenerate
 const REGEN_HINTS={daily:'2026-10-14',monthly:'2026-10',quarterly:'2026-Q4',yearly:'2026'};

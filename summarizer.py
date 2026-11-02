@@ -394,6 +394,81 @@ async def summarize_rollup(rows: list) -> str:
     )
 
 
+# ---- 我和宝宝的大事（里程碑识别） ----
+
+_MS_LINE = re.compile(r"^〔(\d{4}-\d{2}-\d{2})〕\s*(.*)$")
+
+
+def _parse_ms_line(line: str):
+    m = _MS_LINE.match(line.strip())
+    if not m:
+        return None
+    content = m.group(2).strip()
+    return (m.group(1), content) if content else None
+
+
+def parse_milestone_items(text: str) -> list:
+    """解析全量识别输出：〔YYYY-MM-DD〕内容 每行一条。"""
+    out, seen = [], set()
+    for line in str(text or "").splitlines():
+        item = _parse_ms_line(line)
+        if not item:
+            continue
+        if item in seen:  # 逐字重复行去重
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def parse_milestone_delta(text: str) -> dict:
+    """解析增量识别输出：【新增】/【更新】两个区块，各含若干〔日期〕行。
+    返回 {"new": [(date, text)], "updates": [(date, text)]}。"""
+    new, updates, bucket = [], [], None
+    for line in str(text or "").splitlines():
+        s = line.strip()
+        if s == "【新增】":
+            bucket = new
+            continue
+        if s == "【更新】":
+            bucket = updates
+            continue
+        if not s or s == "无":
+            continue
+        item = _parse_ms_line(s)
+        if item and bucket is not None:
+            bucket.append(item)
+    return {"new": new, "updates": updates}
+
+
+async def milestones_full(material: str) -> str:
+    """全量识别：从全部归档材料里识别大事（覆盖重写用）。"""
+    prompt = prompts.MILESTONE_FULL.format(
+        user_label=config.USER_LABEL,
+        max_chars=config.MILESTONE_MAX_CHARS,
+        material=material,
+    )
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        config.MILESTONE_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
+async def milestones_incremental(existing_lines: list, new_texts: list) -> str:
+    """增量识别：已有大事列表 + 新的每日记忆 → 判断有没有新大事/更新。"""
+    prompt = prompts.MILESTONE_INCREMENTAL.format(
+        user_label=config.USER_LABEL,
+        existing="\n".join(existing_lines) or "（还没有任何大事记录）",
+        new_texts="\n".join(new_texts),
+    )
+    return await _chat(
+        [{"role": "user", "content": prompt}],
+        config.MILESTONE_MAX_TOKENS,
+        config.SUMMARY_TEMPERATURE,
+    )
+
+
 # ---- 宝宝画像（两层隔离防编造：提取层见原文只出事实清单；成稿层只见清单不见原文） ----
 
 _PROFILE_OPEN = "「画像开始」"

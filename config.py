@@ -85,6 +85,11 @@ RECENT_MONTHS = _int("RECENT_MONTHS", 2)               # 注入保留最近几�
 RECENT_QUARTERS = _int("RECENT_QUARTERS", 1)           # 注入保留最近几个季概览
 RECENT_YEARS = _int("RECENT_YEARS", 1)                 # 注入保留最近几年概览
 
+# ---- 我和宝宝的大事（里程碑记忆，kind=milestone） ----
+MILESTONE_MAX_TOKENS = _int("MILESTONE_MAX_TOKENS", 8000)      # 大事识别输出 token 上限（全量最多 50 条）
+MILESTONE_MAX_CHARS = _int("MILESTONE_MAX_CHARS", 160)         # 单条大事字数上限
+MILESTONE_SOFT_LIMIT = _int("MILESTONE_SOFT_LIMIT", 50)        # 软上限：超过后在结果里警告（不阻止写入）
+
 # ---- 宝宝画像（手动触发的用户画像记忆，kind=profile） ----
 PROFILE_MAX_CHARS = _int("PROFILE_MAX_CHARS", 1200)        # 画像全文上限（字）
 PROFILE_BATCH_MESSAGES = _int("PROFILE_BATCH_MESSAGES", 200)  # 提取层每批处理多少条消息

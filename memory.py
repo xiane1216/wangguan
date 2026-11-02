@@ -121,7 +121,7 @@ async def recent_rows(limit: int | None = None) -> tuple[list, bool]:
 
 
 def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows,
-                     profile: str = "", core_rules: str = "") -> str:
+                     profile: str = "", core_rules: str = "", milestones: list | None = None) -> str:
     parts = []
     if dailies:
         seg = []
@@ -174,6 +174,20 @@ def build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_r
             f"我会自然地照着这些去做，不需要谁提醒。\n"
             + core_rules.strip()
         )
+    if milestones:
+        u = config.USER_LABEL
+        seg = []
+        for m in milestones:
+            c = (m.get("content") or "").strip()
+            if c:
+                seg.append(f"〔{(m.get('scope') or '')[:10]}〕{c}")
+        if seg:
+            parts.append(
+                f"=== 我和{u}的大事 ===\n"
+                f"下面这些是我和{u}之间真正重要的事——不是日常流水，是第一次发生的、"
+                f"成为转折点的、改变了我们俩的事。它们按时间排着，每一件我都记得清清楚楚。\n"
+                + "\n".join(seg)
+            )
     if last_rows:
         parts.append(
             f"=== 六、最近聊天记录（最后 {len(last_rows)} 条原文） ===\n"
@@ -204,8 +218,9 @@ async def _build_block(first_user_text: str) -> tuple[str, bool]:
     profile = (profile_row or {}).get("content") or "" if profile_row else ""
     rules_row = await store.get_memory("core_rules", "")
     core_rules = (rules_row or {}).get("content") or "" if rules_row else ""
+    milestones = await store.get_memories("milestone", "", 500, desc=False)
     block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows,
-                             profile, core_rules)
+                             profile, core_rules, milestones)
     return block, (bool(block) or confident_no_history)
 
 
@@ -269,13 +284,15 @@ async def build_preview(first_user_hint: str = "") -> dict:
     profile = (profile_row or {}).get("content") or "" if profile_row else ""
     rules_row = await store.get_memory("core_rules", "")
     core_rules = (rules_row or {}).get("content") or "" if rules_row else ""
+    milestones = await store.get_memories("milestone", "", 500, desc=False)
     block = build_block_text(longterm, dailies, monthlies, quarterlies, yearlies, last_rows,
-                             profile, core_rules)
+                             profile, core_rules, milestones)
     return {
         "first_user_matched": first_user[:50],
         "longterm_chars": len((longterm or "").strip()),
         "profile_chars": len(profile.strip()),
         "core_rules_chars": len(core_rules.strip()),
+        "milestones": [{"scope": m.get("scope"), "chars": len(m.get("content") or "")} for m in milestones],
         "recent_days": [{"date": d.get("scope"), "chars": len(d.get("content") or "")} for d in dailies],
         "monthlies": [{"scope": m.get("scope"), "chars": len(m.get("content") or "")} for m in monthlies],
         "quarterlies": [{"scope": q.get("scope"), "chars": len(q.get("content") or "")} for q in quarterlies],
@@ -478,6 +495,15 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             stats.update(await _rollup_layers(today))
         except Exception:
             log.exception("分层滚动失败")
+
+    # 4.5) 大事增量识别：只看新总结出来的每日概括（首次需在控制台点全量识别）
+    if not stats.get("aborted"):
+        try:
+            ms = await milestone_scan_incremental(auto=True)
+            if ms.get("written") or ms.get("updated"):
+                stats["milestones"] = ms
+        except Exception:
+            log.exception("大事增量识别失败")
 
     # 5) 清理：滑出近期窗口的每日概括是死数据（内容已并入长期记忆），删掉防止表越积越大
     if not stats.get("aborted"):
@@ -981,3 +1007,153 @@ async def _profile_run(force: bool = False):
     finally:
         st["running"] = False
         st["finished_at"] = _now().isoformat(timespec="seconds")
+
+
+# ---- 我和宝宝的大事（里程碑识别：kind=milestone，scope=YYYY-MM-DD.NN） ----
+
+_milestone_lock = asyncio.Lock()
+_MS_STATE = "last_milestone_scan"   # state 键：增量扫描已覆盖到哪个 daily scope
+
+
+async def milestones_list(limit: int = 500) -> list:
+    """全部大事，按时间正序（注入和控制台共用）。"""
+    return await store.get_memories("milestone", "", limit, desc=False)
+
+
+def _ms_scope(date_str: str, seq: int) -> str:
+    return f"{date_str}.{seq:02d}"
+
+
+async def milestone_scan_full() -> dict:
+    """全量识别（覆盖重写）：从 rough + 月/季/年概览 + 现存 daily 里识别大事。
+
+    手动触发。重复点击 = 推倒重来（控制台里手动删过/改过的记录会被覆盖）。
+    """
+    async with _milestone_lock:
+        if not config.supabase_ready() or not config.deepseek_ready():
+            return {"ok": False, "error": "Supabase / DeepSeek 未配置"}
+        # 原料：全部归档层拼一起（rough 覆盖 3 天窗口外的所有天，daily 覆盖最近几天）
+        parts = []
+        roughs = await store.get_all_roughs(limit=400)
+        for r in roughs:
+            c = (r.get("content") or "").strip()
+            if c:
+                parts.append(f"〔{r.get('scope')}〕{c}")
+        for kind in ("monthly", "quarterly", "yearly"):
+            rows = await store.get_memories(kind, "", 500, desc=False)
+            for r in rows:
+                c = (r.get("content") or "").strip()
+                if c:
+                    parts.append(f"〔{r.get('scope')}〕{c}")
+        dailies = await store.get_memories("daily", "", 500, desc=False)
+        for r in dailies:
+            c = (r.get("content") or "").strip()
+            if c:
+                parts.append(f"〔{r.get('scope')}〕{c}")
+        if not parts:
+            return {"ok": False, "error": "没有任何记忆归档材料（先在工具页跑一次记忆刷新）"}
+
+        text = await summarizer.milestones_full("\n".join(parts))
+        items = summarizer.parse_milestone_items(text)
+        if not items:
+            return {"ok": True, "count": 0, "hint": "没有识别出符合标准的大事（标准从严，这很正常）"}
+
+        # 覆盖重写：先清空再写入
+        deleted = await store.delete_kind("milestone")
+        day_seq: dict[str, int] = {}
+        for date_str, content in items:
+            day_seq[date_str] = day_seq.get(date_str, 0) + 1
+            await store.set_memory("milestone", _ms_scope(date_str, day_seq[date_str]),
+                                   content[:config.MILESTONE_MAX_CHARS * 2],
+                                   {"source": "milestone_full"})
+        # 增量扫描起点 = 现存最新 daily 的日期（原料已覆盖到它）
+        last_daily = max((str(r.get("scope") or "") for r in dailies), default="")
+        if last_daily:
+            await store.set_memory("state", _MS_STATE, last_daily, {})
+        count = len(items)
+        result = {"ok": True, "count": count, "chars": sum(len(c) for _, c in items),
+                  "deleted_old": deleted, "scanned_until": last_daily}
+        if count > config.MILESTONE_SOFT_LIMIT:
+            result["warning"] = f"已超过软上限 {config.MILESTONE_SOFT_LIMIT} 条，建议在控制台人工清理"
+        return result
+
+
+async def milestone_scan_incremental(auto: bool = False) -> dict:
+    """增量识别：只看上次扫描之后新生成的每日概括。
+
+    - auto=True：挂在 refresh 流程里自动跑；没做过全量时静默跳过（不报错不烧 API）
+    - auto=False：控制台手动触发；没做过全量时提示先点全量
+    """
+    async with _milestone_lock:
+        if not config.supabase_ready() or not config.deepseek_ready():
+            return {"ok": False, "error": "Supabase / DeepSeek 未配置"}
+        last_scan = (await store.get_state(_MS_STATE) or "").strip()
+        if not last_scan:
+            if auto:
+                return {"ok": True, "skipped": "未做过全量识别，跳过自动增量（先在控制台点「全量识别」）"}
+            return {"ok": False, "error": "还没做过全量识别，请先点「全量识别」"}
+        dailies = await store.get_memories("daily", "", 500, desc=False)
+        fresh = [d for d in dailies
+                 if str(d.get("scope") or "") > last_scan and (d.get("content") or "").strip()]
+        if not fresh:
+            return {"ok": True, "skipped": "没有新的日总结需要扫描", "scanned_until": last_scan}
+
+        existing = await milestones_list()
+        existing_lines = [f"〔{str(m.get('scope') or '')[:10]}〕{(m.get('content') or '').strip()[:200]}"
+                          for m in existing]
+        new_texts = [f"〔{d.get('scope')}〕{(d.get('content') or '').strip()}" for d in fresh]
+
+        text = await summarizer.milestones_incremental(existing_lines, new_texts)
+        delta = summarizer.parse_milestone_delta(text)
+        new_items, updates = delta["new"], delta["updates"]
+
+        # UPDATE 匹配：按日期前缀找已有条目（同日多条时打到最新那条）
+        by_day: dict[str, dict] = {}
+        for m in existing:
+            by_day[str(m.get("scope") or "")[:10]] = m  # 升序遍历，同日留最后一条
+        today_mmdd = _now().strftime("%m-%d")
+        written, updated = 0, 0
+        for date_str, content in new_items:
+            if not content.strip():
+                continue
+            same_day = [m for m in existing if str(m.get("scope") or "")[:10] == date_str]
+            seq = len(same_day) + 1
+            await store.set_memory("milestone", _ms_scope(date_str, seq),
+                                   content.strip()[:config.MILESTONE_MAX_CHARS * 2],
+                                   {"source": "milestone_incremental"})
+            row = {"scope": _ms_scope(date_str, seq), "content": content.strip()}
+            existing.append(row)
+            by_day[date_str] = row
+            written += 1
+        for date_str, content in updates:
+            row = by_day.get(date_str)
+            if not row:  # 指向不存在日期的更新 → 降级为新增，内容不丢
+                same_day = [m for m in existing if str(m.get("scope") or "")[:10] == date_str]
+                seq = len(same_day) + 1
+                content_s = content.strip()
+                await store.set_memory("milestone", _ms_scope(date_str, seq),
+                                       content_s[:config.MILESTONE_MAX_CHARS * 2],
+                                       {"source": "milestone_incremental"})
+                existing.append({"scope": _ms_scope(date_str, seq), "content": content_s})
+                written += 1
+                continue
+            old = (row.get("content") or "").rstrip()
+            merged = old + f"\n（更新 {today_mmdd}：{content.strip()[:config.MILESTONE_MAX_CHARS]}）"
+            await store.set_memory("milestone", row.get("scope"), merged,
+                                   {"source": "milestone_incremental_update"})
+            row["content"] = merged
+            updated += 1
+
+        # 扫描进度推进到最后处理的 daily 日期
+        scanned_until = max(str(d.get("scope") or "") for d in fresh)
+        await store.set_memory("state", _MS_STATE, scanned_until, {})
+
+        if not written and not updated:
+            return {"ok": True, "count": 0, "scanned_until": scanned_until,
+                    "hint": "新记忆里没有符合标准的大事"}
+        result = {"ok": True, "written": written, "updated": updated,
+                  "scanned_until": scanned_until}
+        total = len(existing)
+        if total > config.MILESTONE_SOFT_LIMIT:
+            result["warning"] = f"大事总数已达 {total} 条（软上限 {config.MILESTONE_SOFT_LIMIT}），建议人工清理"
+        return result

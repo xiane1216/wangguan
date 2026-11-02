@@ -200,6 +200,37 @@ async def delete_dailies_before(min_date_str: str) -> int:
         return 0
 
 
+async def delete_memory(kind: str, scope: str) -> bool:
+    """删除 gateway_memory 里 kind+scope 匹配的一行（控制台人工清理用）。"""
+    if not config.supabase_ready():
+        return False
+    url = f"{config.SUPABASE_URL}/rest/v1/{config.MEMORY_TABLE}?kind=eq.{quote(kind, safe='')}&scope=eq.{quote(scope, safe='')}"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.delete(url, headers=_headers("return=representation"))
+    if r.status_code >= 400:
+        raise RuntimeError(f"删除 {kind}/{scope} 失败: HTTP {r.status_code} {r.text[:200]}")
+    try:
+        return bool(r.json())
+    except Exception:
+        return True
+
+
+async def delete_kind(kind: str) -> int:
+    """删除某个 kind 的全部行（全量识别覆盖重写用）。返回删除条数。"""
+    if not config.supabase_ready():
+        return 0
+    url = f"{config.SUPABASE_URL}/rest/v1/{config.MEMORY_TABLE}?kind=eq.{quote(kind, safe='')}"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.delete(url, headers=_headers("return=representation"))
+    if r.status_code >= 400:
+        raise RuntimeError(f"清理 {kind} 失败: HTTP {r.status_code} {r.text[:200]}")
+    try:
+        data = r.json()
+        return len(data) if isinstance(data, list) else 0
+    except Exception:
+        return 0
+
+
 async def get_state(scope: str) -> str | None:
     rows = await _sb_get(config.MEMORY_TABLE, f"select=content&kind=eq.state&scope=eq.{scope}&limit=1")
     if not rows:

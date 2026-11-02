@@ -268,12 +268,15 @@ async def admin_memory(request: Request):
     profile = (profile_row or {}).get("content") or "" if profile_row else None
     rules_row = await store.get_memory("core_rules", "")
     core_rules = (rules_row or {}).get("content") or "" if rules_row else None
+    milestones = await store.get_memories("milestone", "", 500, desc=False)
     return JSONResponse({
         "longterm": longterm,
         "profile": profile,
         "profile_chars": len(profile or ""),
         "core_rules": core_rules,
         "core_rules_chars": len(core_rules or ""),
+        "milestones": [{"scope": m.get("scope"), "content": m.get("content")} for m in milestones],
+        "milestone_count": len(milestones),
         "last_errors": last_errors,
         "longterm_chars": len((longterm or "").strip()),
         "retire_longterm": config.RETIRE_LONGTERM,
@@ -372,6 +375,37 @@ async def admin_import_core_rules(request: Request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     result = await memory.import_core_rules()
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
+async def admin_milestones_scan(request: Request):
+    """大事识别：mode=full 全量（覆盖重写）/ incremental 增量（挂在刷新流程里也会自动跑）。"""
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    mode = request.query_params.get("mode", "incremental").strip().lower()
+    try:
+        if mode == "full":
+            result = await memory.milestone_scan_full()
+        else:
+            result = await memory.milestone_scan_incremental(auto=False)
+    except Exception as exc:
+        log.exception("大事识别失败 mode=%s", mode)
+        return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
+async def admin_milestones_delete(request: Request):
+    """删除一条大事（控制台人工清理误判用）。"""
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    scope = request.query_params.get("scope", "").strip()
+    if not scope:
+        return JSONResponse({"ok": False, "error": "缺少 scope 参数"}, status_code=400)
+    try:
+        deleted = await store.delete_memory("milestone", scope)
+    except Exception as exc:
+        log.exception("删除大事失败 scope=%s", scope)
+        return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+    return JSONResponse({"ok": bool(deleted), "scope": scope})
 
 
 async def admin_import_ob(request: Request):
@@ -480,6 +514,8 @@ app = Starlette(routes=[
     Route("/admin/profile_status", admin_profile_status, methods=["GET"]),
     Route("/admin/import_ob", admin_import_ob, methods=["GET", "POST"]),
     Route("/admin/import_core_rules", admin_import_core_rules, methods=["GET", "POST"]),
+    Route("/admin/milestones/scan", admin_milestones_scan, methods=["GET", "POST"]),
+    Route("/admin/milestones/delete", admin_milestones_delete, methods=["GET", "POST"]),
     Route("/admin/preview", admin_preview, methods=["GET"]),
     Route("/debug/xray", debug_xray, methods=["GET"]),
 ], lifespan=lifespan)
