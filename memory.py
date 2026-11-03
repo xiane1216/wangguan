@@ -376,7 +376,8 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
 
     today = _now().date()
     earliest = today - timedelta(days=config.MAX_BACKFILL_DAYS)
-    rows = await store.fetch_chats_between(earliest, today + timedelta(days=1))
+    # 大窗口可能超 20000 条：newest_first 截断保最新，牺牲最旧历史（会走粗略归档）
+    rows = await store.fetch_chats_between(earliest, today + timedelta(days=1), newest_first=True)
     by_day = {}
     for r in rows:
         d = _row_date(r.get("created_at"))
@@ -550,7 +551,7 @@ async def regenerate(kind: str, scope: str) -> dict:
         d = _parse_date(scope)
         if not d:
             return {"ok": False, "error": "scope 格式应为 YYYY-MM-DD"}
-        rows = await store.fetch_chats_between(d, d + timedelta(days=1))
+        rows = await store.fetch_chats_between(d, d + timedelta(days=1), newest_first=True)
         if not rows:
             return {"ok": False, "error": f"{scope} 没有聊天记录", "messages": 0}
         summary = await summarizer.summarize_day(scope, rows)

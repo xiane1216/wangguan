@@ -76,18 +76,26 @@ async def fetch_recent_chats(limit: int = 600) -> list:
     return rows
 
 
-async def fetch_chats_between(start_date, end_date, limit: int = 20000) -> list:
+async def fetch_chats_between(start_date, end_date, limit: int = 20000,
+                              newest_first: bool = False) -> list:
     """取 [start_date, end_date) 之间的聊天记录，按时间升序。start/end 是 date 对象。
+
+    newest_first=True 时超量截断保「最新」：倒序翻页取最近 limit 条再反转回升序。
+    截断牺牲的是最旧的历史（本就该走粗略归档），绝不能丢最新消息——
+    否则当天晚上的消息会整体缺失，日总结只写到中午/下午。
+    大窗口（30天）总量一旦超过 limit，升序截断保旧丢新，这就是
+    "日总结只总结到下午五六点、晚上凭空消失"的原因。
 
     重要：Supabase 托管接口单次请求最多只返回约 1000 行。
     必须用 offset 翻页拉全，否则只能拿到范围内最旧的一批
     （这就是之前"9/5 之后的记录凭空消失"的原因）。
     """
+    order = "created_at.desc,id.desc" if newest_first else "created_at.asc,id.asc"
     base = (
         f"select=id,assistant_id,conversation_id,role,content,created_at"
         f"&created_at=gte.{start_date.isoformat()}"
         f"&created_at=lt.{end_date.isoformat()}"
-        f"&order=created_at.asc,id.asc"
+        f"&order={order}"
     )
     if config.ASSISTANT_ID:
         base += f"&assistant_id=eq.{config.ASSISTANT_ID}"
@@ -99,7 +107,8 @@ async def fetch_chats_between(start_date, end_date, limit: int = 20000) -> list:
             break
         out.extend(rows)
         offset += len(rows)  # 按实际返回条数推进，兼容服务端更小的单页上限
-    return out[:cap]
+    out = out[:cap]
+    return list(reversed(out)) if newest_first else out
 
 
 async def fetch_chats_after(after_ts: str = "", limit: int = 200000) -> list:
