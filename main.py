@@ -408,6 +408,39 @@ async def admin_milestones_delete(request: Request):
     return JSONResponse({"ok": bool(deleted), "scope": scope})
 
 
+async def admin_memory_edit(request: Request):
+    """控制台编辑记忆模块：kind=profile/core_rules 整篇覆盖；kind=milestone 需带 scope（可编辑/新增）。"""
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "JSON 解析失败"}, status_code=400)
+    kind = (body.get("kind") or "").strip()
+    content = (body.get("content") or "").strip()
+    edited_at = memory._now().strftime("%Y-%m-%d %H:%M")
+    if kind in ("profile", "core_rules"):
+        try:
+            await store.set_memory(kind, "", content, {"source": "admin_edit", "edited_at": edited_at})
+        except Exception as exc:
+            log.exception("控制台编辑 %s 失败", kind)
+            return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        log.info("控制台编辑 %s（%d 字）", kind, len(content))
+        return JSONResponse({"ok": True, "kind": kind, "chars": len(content)})
+    if kind == "milestone":
+        scope = (body.get("scope") or "").strip()
+        if not scope:
+            return JSONResponse({"ok": False, "error": "kind=milestone 需要带 scope"}, status_code=400)
+        try:
+            await store.set_memory("milestone", scope, content, {"source": "admin_edit", "edited_at": edited_at})
+        except Exception as exc:
+            log.exception("控制台编辑 milestone 失败 scope=%s", scope)
+            return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+        log.info("控制台编辑 milestone %s（%d 字）", scope, len(content))
+        return JSONResponse({"ok": True, "kind": "milestone", "scope": scope, "chars": len(content)})
+    return JSONResponse({"ok": False, "error": "kind 必须是 profile / core_rules / milestone"}, status_code=400)
+
+
 async def admin_import_ob(request: Request):
     if not _check_admin(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -516,6 +549,7 @@ app = Starlette(routes=[
     Route("/admin/import_core_rules", admin_import_core_rules, methods=["GET", "POST"]),
     Route("/admin/milestones/scan", admin_milestones_scan, methods=["GET", "POST"]),
     Route("/admin/milestones/delete", admin_milestones_delete, methods=["GET", "POST"]),
+    Route("/admin/memory_edit", admin_memory_edit, methods=["POST"]),
     Route("/admin/preview", admin_preview, methods=["GET"]),
     Route("/debug/xray", debug_xray, methods=["GET"]),
 ], lifespan=lifespan)
