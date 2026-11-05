@@ -178,6 +178,11 @@ dialog h3{font-size:18px;margin-bottom:16px}
       <div id="monthliesView" class="muted">尚未加载</div>
     </div>
     <div class="card">
+      <h2>⭐ 粗略归档（重要度） <span class="badge" id="roughBadge">—</span></h2>
+      <p class="muted" style="margin-bottom:10px">每天的粗略归档，带重要度评分（1-5）。5 分 = 宝宝提出的对待方式要求 / 重大披露 / 重大转折，月度归档时会完整保留细节不压缩；4 分 = 约定决定；3 分以下会被正常压缩。老数据没有评分的显示为 3。</p>
+      <div id="roughsView" class="muted">尚未加载</div>
+    </div>
+    <div class="card">
       <h2>🍂 季度概览（季） <span class="badge" id="quarterlyBadge">—</span></h2>
       <div id="quarterliesView" class="muted">尚未加载</div>
     </div>
@@ -380,6 +385,15 @@ function renderMemoryList(viewId,badgeId,items,scopeKey){
   badge.textContent=items.length+' 条';
   view.innerHTML=items.map(it=>`<div class="card" style="margin-bottom:8px;padding:14px"><div class="row" style="margin-bottom:6px"><span class="tag">${esc(it[scopeKey]||'')}</span><span class="muted">${(it.content||'').length} 字</span></div><pre class="mono" style="max-height:200px;overflow:auto">${esc(it.content||'')}</pre></div>`).join('');
 }
+const ROUGH_IMP_STYLE={5:'background:#ffe4ec;color:#c2456f;border:1.5px solid #f3b7cb',4:'background:#fff1dd;color:#c07a2a;border:1.5px solid #f0d3a6',3:'background:var(--bg2);color:var(--muted);border:1.5px solid var(--border)',2:'background:var(--bg2);color:var(--muted);border:1.5px solid var(--border)',1:'background:var(--bg2);color:var(--muted);border:1.5px solid var(--border)'};
+const ROUGH_IMP_LABEL={5:'♥ 5 最要紧',4:'★ 4 重要',3:'3 普通',2:'2 日常',1:'1 流水'};
+function renderRoughs(items){
+  const view=$('roughsView'),badge=$('roughBadge');
+  if(!items||!items.length){view.innerHTML='<span class="muted">暂无</span>';badge.textContent='0 条';return}
+  badge.textContent=items.length+' 条';
+  const sorted=[...items].sort((a,b)=>(b.importance||3)-(a.importance||3)||String(b.scope||'').localeCompare(String(a.scope||'')));
+  view.innerHTML=sorted.map(it=>{const imp=it.importance||3;return `<div class="card" style="margin-bottom:8px;padding:14px"><div class="row" style="margin-bottom:6px;gap:8px"><span class="tag">${esc(it.scope||'')}</span><span class="tag" style="${ROUGH_IMP_STYLE[imp]||ROUGH_IMP_STYLE[3]}">${ROUGH_IMP_LABEL[imp]||ROUGH_IMP_LABEL[3]}</span><span class="muted">${(it.content||'').length} 字</span></div><pre class="mono" style="max-height:160px;overflow:auto">${esc(it.content||'')}</pre></div>`}).join('');
+}
 async function loadMemory(){
   try{
     const d=await api('/admin/memory');
@@ -390,6 +404,7 @@ async function loadMemory(){
     $('rulesBadge').textContent=(d.core_rules_chars||0)+' 字';
     $('rulesView').textContent=d.core_rules||'(还没有约定契约，去工具页点「拉取核心准则订桶」)';
     renderMilestones(d.milestones);
+    renderRoughs(d.roughs);
     renderMemoryList('dailiesView','dailyBadge',d.recent_daily,'date');
     renderMemoryList('monthliesView','monthlyBadge',d.monthlies,'scope');
     renderMemoryList('quarterliesView','quarterlyBadge',d.quarterlies,'scope');

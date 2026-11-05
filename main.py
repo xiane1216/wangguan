@@ -269,6 +269,14 @@ async def admin_memory(request: Request):
     rules_row = await store.get_memory("core_rules", "")
     core_rules = (rules_row or {}).get("content") or "" if rules_row else None
     milestones = await store.get_memories("milestone", "", 500, desc=False)
+    rough_rows = await store.get_all_roughs(limit=400)
+    roughs = []
+    for m in rough_rows:
+        try:
+            imp = int(json.loads(m.get("meta") or "{}").get("importance") or 0)
+        except Exception:
+            imp = 0
+        roughs.append({"scope": m.get("scope"), "content": m.get("content"), "importance": imp or 3})
     return JSONResponse({
         "longterm": longterm,
         "profile": profile,
@@ -277,6 +285,7 @@ async def admin_memory(request: Request):
         "core_rules_chars": len(core_rules or ""),
         "milestones": [{"scope": m.get("scope"), "content": m.get("content")} for m in milestones],
         "milestone_count": len(milestones),
+        "roughs": roughs,
         "last_errors": last_errors,
         "longterm_chars": len((longterm or "").strip()),
         "retire_longterm": config.RETIRE_LONGTERM,
