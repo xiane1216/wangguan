@@ -240,37 +240,53 @@ async def summarize_day(date_str: str, rows: list) -> str:
     return _hard_cap(summary, config.DAILY_MAX_CHARS)
 
 
-async def rough_from_raw(date_str: str, rows: list) -> str:
+def parse_importance(text: str) -> tuple[str, int]:
+    """从粗略归档输出里剥掉 [N] 重要度前缀，返回 (纯文本, 重要度)。
+
+    没有 [N] 前缀或 N 不在 1-5 范围时，按 3 分处理（中性默认值）。
+    """
+    s = (text or "").strip()
+    m = re.match(r"^\[?([1-5])\]?\s*[,，、:：]?\s*(.*)$", s, re.S)
+    if m:
+        return m.group(2).strip(), int(m.group(1))
+    return s, 3
+
+
+async def rough_from_raw(date_str: str, rows: list) -> tuple[str, int]:
     """从一天的原始聊天记录直接生成粗略归档（1~3 句话）。
 
     超量天同样拼"较早时段要点"——历史回填（比如补8月的粗归档）时，
     不能让月度概览只建立在"每天最后400条"的尾巴视角上。"""
     text = await _day_material(date_str, rows, clip=400)
     if not text.strip():
-        return ""
+        return "", 3
     prompt = prompts.ROUGH_ARCHIVE.format(
         user_label=config.USER_LABEL,
         ai_label=config.AI_LABEL,
         date=date_str,
         transcript=text,
     )
-    return await _chat(
+    raw = await _chat(
         [{"role": "user", "content": prompt}],
         config.SUMMARY_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
+    return parse_importance(_clean(raw))
 
 
-async def rough_from_summary(date_str: str, daily_text: str) -> str:
+async def rough_from_summary(date_str: str, daily_text: str) -> tuple[str, int]:
     """把已有的详细每日概括压缩成粗略归档（更省输入）。
     bugfix：max_tokens 从 1200 提到 ROUGH_MAX_TOKENS（默认 8000）——
     flash 推理烧 token 是常态，1200 会被推理烧光导致空正文抛错，正好触发归档失败。"""
-    prompt = prompts.ROUGH_FROM_SUMMARY.format(date=date_str, daily=daily_text, user_label=config.USER_LABEL)
-    return await _chat(
+    prompt = prompts.ROUGH_FROM_SUMMARY.format(
+        date=date_str, daily=daily_text,
+        user_label=config.USER_LABEL, ai_label=config.AI_LABEL)
+    raw = await _chat(
         [{"role": "user", "content": prompt}],
         config.ROUGH_MAX_TOKENS,
         config.SUMMARY_TEMPERATURE,
     )
+    return parse_importance(_clean(raw))
 
 
 async def summarize_month(month_scope: str, texts: list) -> str:

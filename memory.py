@@ -346,6 +346,22 @@ def _meta_merged(row: dict) -> bool:
         return False
 
 
+def _rough_text(row: dict) -> str:
+    """rough 行 → 月度素材行：〔日期〕内容，重要度 ≥4 时带 [重要度N] 标记。
+
+    标记供月度总结 prompt 做「重要度保护」（5 分条目细节完整保留，不许压缩）。
+    """
+    content = (row.get("content") or "").strip()
+    if not content:
+        return ""
+    try:
+        imp = int(json.loads(row.get("meta") or "{}").get("importance") or 0)
+    except Exception:
+        imp = 0
+    tag = f"[重要度{imp}] " if imp >= 4 else ""
+    return f"〔{row.get('scope')}〕{tag}{content}"
+
+
 _refresh_lock = asyncio.Lock()      # 同一时间只允许一个刷新任务（防撞车双倍烧 API）
 _MAX_CONSEC_FAIL = 5                # 连续失败 N 次本轮收工，等下一轮
 _MAX_ARCHIVE_PER_CYCLE = 40         # 每轮最多归档多少个老日子
@@ -438,9 +454,9 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             existing = await store.get_daily(str(day))
             try:
                 if existing and (existing.get("content") or "").strip():
-                    note = await summarizer.rough_from_summary(str(day), existing["content"])
+                    note, importance = await summarizer.rough_from_summary(str(day), existing["content"])
                 else:
-                    note = await summarizer.rough_from_raw(str(day), day_rows)
+                    note, importance = await summarizer.rough_from_raw(str(day), day_rows)
             except Exception as exc:
                 log.exception("归档 %s 失败", day)
                 stats["day_errors"]["archive:" + str(day)] = f"{type(exc).__name__}: {str(exc)[:180]}"
@@ -453,7 +469,7 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
             if not note.strip():
                 stats["day_errors"]["archive:" + str(day)] = "当天没有可归档的聊天记录"
                 continue
-            await store.set_memory("rough", str(day), note, {"merged": 0})
+            await store.set_memory("rough", str(day), note, {"merged": 0, "importance": importance})
             # absorbed_until 仅作展示/兼容保留，不再参与消化判断
             await store.set_memory("state", "absorbed_until", str(day), {})
             stats["days_archived"].append(str(day))
@@ -566,8 +582,7 @@ async def regenerate(kind: str, scope: str) -> dict:
         if len(scope) != 7 or not scope.startswith(("19", "20")):
             return {"ok": False, "error": "scope 格式应为 YYYY-MM"}
         rough_rows = await store.get_memories("rough", "", 500, desc=False)
-        texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}"
-                 for r in rough_rows
+        texts = [_rough_text(r) for r in rough_rows
                  if str(r.get("scope") or "")[:7] == scope and (r.get("content") or "").strip()]
         if not texts:
             return {"ok": False, "error": f"{scope} 没有可用的粗略归档（日总结要先归档成 rough）"}
@@ -630,7 +645,7 @@ async def _rollup_layers(today) -> dict:
         for m in sorted(months):
             if m > today_month:
                 continue
-            texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}" for r in months[m]]
+            texts = [_rough_text(r) for r in months[m]]
             if m == today_month:
                 # 进行中的月：增量合并，每次刷新都更新，不跳过
                 existing = await store.get_memory("monthly", m)
