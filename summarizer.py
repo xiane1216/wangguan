@@ -296,6 +296,7 @@ async def summarize_month(month_scope: str, texts: list) -> str:
         return ""
     prompt = prompts.MONTHLY_SUMMARY.format(
         user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
         scope=month_scope,
         max_chars=config.MONTHLY_MAX_CHARS,
         transcript=joined,
@@ -315,6 +316,7 @@ async def merge_month_in_progress(month_scope: str, existing: str, new_texts: li
         return (existing or "").strip()
     prompt = prompts.MONTHLY_IN_PROGRESS.format(
         user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
         scope=month_scope,
         max_chars=config.MONTHLY_MAX_CHARS,
         existing=(existing or "").strip() or "（暂无）",
@@ -461,6 +463,7 @@ async def milestones_full(material: str) -> str:
     """全量识别：从全部归档材料里识别大事（覆盖重写用）。"""
     prompt = prompts.MILESTONE_FULL.format(
         user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
         max_chars=config.MILESTONE_MAX_CHARS,
         material=material,
     )
@@ -475,6 +478,7 @@ async def milestones_incremental(existing_lines: list, new_texts: list) -> str:
     """增量识别：已有大事列表 + 新的每日记忆 → 判断有没有新大事/更新。"""
     prompt = prompts.MILESTONE_INCREMENTAL.format(
         user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
         existing="\n".join(existing_lines) or "（还没有任何大事记录）",
         new_texts="\n".join(new_texts),
     )
