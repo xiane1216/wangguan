@@ -510,8 +510,9 @@ async def _refresh_once_inner(force_days: int = 0) -> dict:
     if not stats.get("aborted"):
         try:
             stats.update(await _rollup_layers(today))
-        except Exception:
+        except Exception as exc:
             log.exception("分层滚动失败")
+            stats["rollup_errors"] = [f"分层滚动整体失败: {type(exc).__name__}: {str(exc)[:200]}"]
 
     # 4.5) 大事增量识别：只看新总结出来的每日概括（首次需在控制台点全量识别）
     if not stats.get("aborted"):
@@ -627,9 +628,14 @@ async def regenerate(kind: str, scope: str) -> dict:
 
 async def _rollup_layers(today) -> dict:
     """月/季/年分层滚动归档。
-    已结束的月/季/年只在周期结束后滚动一次；当月（进行中）每次刷新都增量合并。"""
+    已结束的月/季/年只在周期结束后滚动一次；当月（进行中）每次刷新都增量合并。
+    所有失败都记进 stats["rollup_errors"] 随刷新结果上报（之前只进容器日志，
+    控制台看不到——"当月月度一直没生成"就是这种静默失败，排查无从下手）。"""
     stats = {"months_rolled": [], "quarters_rolled": [], "years_rolled": []}
+    errs: list = []
     if not config.supabase_ready() or not config.deepseek_ready():
+        errs.append("Supabase / DeepSeek 未配置，分层滚动跳过")
+        stats["rollup_errors"] = errs
         return stats
 
     # 月度：已结束的月一次性压成 monthly；当月（进行中）增量合并
@@ -652,32 +658,46 @@ async def _rollup_layers(today) -> dict:
                 existing_text = (existing.get("content") or "").strip() if existing else ""
                 try:
                     monthly = await summarizer.merge_month_in_progress(m, existing_text, texts)
-                except Exception:
+                except Exception as exc:
                     log.exception("进行中月度合并失败 %s", m)
+                    errs.append(f"进行中月度合并失败 {m}: {type(exc).__name__}: {str(exc)[:200]}")
                     continue
                 if monthly.strip():
                     await store.set_memory("monthly", m, monthly, {"source": "monthly_in_progress"})
                     stats["months_rolled"].append(m)
+                else:
+                    errs.append(f"进行中月度合并 {m} 返回空内容，未写入")
             else:
                 # 已结束的月：定稿一次，之后不再动。
                 # 例外：若现存的是"进行中版本"（月末最后一天的日总结来不及进月概览），
                 # 月初第一次滚动时原料已齐（归档在滚动之前），补一次定稿把尾巴收进去。
                 existing = await store.get_memory("monthly", m)
                 if existing:
-                    src = ((existing.get("meta") or {}).get("source") or "")
+                    # meta 在库里是 JSON 字符串（set_memory 用 json.dumps 写入），必须先
+                    # json.loads 再取字段；直接 .get("source") 会对 str 调 .get 抛
+                    # AttributeError，被外层吞掉后整个月度段落（含当月合并）全部中断
+                    # ——这就是"当月月度一直静默不生成"的根因。
+                    try:
+                        src = (json.loads(existing.get("meta") or "{}") or {}).get("source") or ""
+                    except Exception:
+                        src = ""
                     if src != "monthly_in_progress":
                         continue
                     log.info("月概览 %s 仍是进行中版本，月初补定稿", m)
                 try:
                     monthly = await summarizer.summarize_month(m, texts)
-                except Exception:
+                except Exception as exc:
                     log.exception("月度归档失败 %s", m)
+                    errs.append(f"月度定稿失败 {m}: {type(exc).__name__}: {str(exc)[:200]}")
                     continue
                 if monthly.strip():
                     await store.set_memory("monthly", m, monthly, {"source": "monthly_rollup"})
                     stats["months_rolled"].append(m)
-    except Exception:
+                else:
+                    errs.append(f"月度定稿 {m} 返回空内容，未写入")
+    except Exception as exc:
         log.exception("月度滚动失败")
+        errs.append(f"月度滚动整体失败: {type(exc).__name__}: {str(exc)[:200]}")
 
     # 季度：把已结束的季的 monthly 压成 quarterly
     try:
@@ -697,14 +717,18 @@ async def _rollup_layers(today) -> dict:
             texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}" for r in quarters[q]]
             try:
                 quarterly = await summarizer.summarize_quarter(q, texts)
-            except Exception:
+            except Exception as exc:
                 log.exception("季度归档失败 %s", q)
+                errs.append(f"季度归档失败 {q}: {type(exc).__name__}: {str(exc)[:200]}")
                 continue
             if quarterly.strip():
                 await store.set_memory("quarterly", q, quarterly, {"source": "quarterly_rollup"})
                 stats["quarters_rolled"].append(q)
-    except Exception:
+            else:
+                errs.append(f"季度归档 {q} 返回空内容，未写入")
+    except Exception as exc:
         log.exception("季度滚动失败")
+        errs.append(f"季度滚动整体失败: {type(exc).__name__}: {str(exc)[:200]}")
 
     # 年度：把已结束的年的 quarterly 压成 yearly
     try:
@@ -723,15 +747,21 @@ async def _rollup_layers(today) -> dict:
             texts = [f"〔{r.get('scope')}〕{(r.get('content') or '').strip()}" for r in years[y]]
             try:
                 yearly = await summarizer.summarize_year(y, texts)
-            except Exception:
+            except Exception as exc:
                 log.exception("年度归档失败 %s", y)
+                errs.append(f"年度归档失败 {y}: {type(exc).__name__}: {str(exc)[:200]}")
                 continue
             if yearly.strip():
                 await store.set_memory("yearly", y, yearly, {"source": "yearly_rollup"})
                 stats["years_rolled"].append(y)
-    except Exception:
+            else:
+                errs.append(f"年度归档 {y} 返回空内容，未写入")
+    except Exception as exc:
         log.exception("年度滚动失败")
+        errs.append(f"年度滚动整体失败: {type(exc).__name__}: {str(exc)[:200]}")
 
+    if errs:
+        stats["rollup_errors"] = errs
     return stats
 
 
@@ -739,7 +769,7 @@ async def _finish_refresh(stats: dict) -> dict:
     """收尾：记录刷新时间和错误摘要，方便管理接口排查。"""
     try:
         await store.set_memory("state", "last_refresh", _now().isoformat(), {})
-        err = {k: v for k, v in stats.items() if k in ("day_errors", "merge_error")}
+        err = {k: v for k, v in stats.items() if k in ("day_errors", "merge_error", "rollup_errors")}
         await store.set_memory("state", "last_errors", json.dumps(err, ensure_ascii=False), {})
     except Exception:
         log.exception("错误状态写入失败")

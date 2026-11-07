@@ -30,6 +30,9 @@ _THINK_CLOSE = "\u003c\u002f\u0074\u0068\u0069\u006e\u006b\u003e"
 # 正文起始标记：prompt 要求模型输出第一行必须是它。
 # 只取「最后一次出现」之后的内容，标记之前的推理/复述/废话一律丢弃。
 _MARKER = "「记忆归档开始」"
+# 宽松匹配：模型经常不带「」输出（裸文字/【】/其他引号），严格匹配剥不掉标记，
+# 结果脏头部存进记忆、rough 的 [N] 重要度前缀不在字符串开头导致打分全部失效。
+_MARKER_RE = re.compile(r"[「【『\"'“”]*记忆归档开始[」』】\"'“”]*\s*[:：]?\s*")
 
 
 def _clean(text: str) -> str:
@@ -38,10 +41,10 @@ def _clean(text: str) -> str:
     text = re.sub(re.escape(_THINK_OPEN) + r".*?" + re.escape(_THINK_CLOSE), "", text, flags=re.S)
     # 2) 去掉落单的思考标签
     text = text.replace(_THINK_OPEN, "").replace(_THINK_CLOSE, "")
-    # 3) 截取正文起始标记之后的内容（防推理泄漏）
-    idx = text.rfind(_MARKER)
-    if idx >= 0:
-        text = text[idx + len(_MARKER):]
+    # 3) 截取正文起始标记之后的内容（防推理泄漏），标记写法宽松匹配
+    matches = list(_MARKER_RE.finditer(text))
+    if matches:
+        text = text[matches[-1].end():]
     return text.strip()
 
 
@@ -244,8 +247,13 @@ def parse_importance(text: str) -> tuple[str, int]:
     """从粗略归档输出里剥掉 [N] 重要度前缀，返回 (纯文本, 重要度)。
 
     没有 [N] 前缀或 N 不在 1-5 范围时，按 3 分处理（中性默认值）。
+    容忍残留的头部标记行（如"记忆归档开始"）：先跳过再解析，
+    否则 [N] 不在字符串开头，打分会全部落到默认 3 分。
     """
     s = (text or "").strip()
+    m = re.match(r"^[「【『\"'“”]*记忆归档开始[」』】\"'“”]*\s*[:：]?\s*\n?", s)
+    if m:
+        s = s[m.end():].strip()
     m = re.match(r"^\[?([1-5])\]?\s*[,，、:：]?\s*(.*)$", s, re.S)
     if m:
         return m.group(2).strip(), int(m.group(1))
