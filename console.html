@@ -183,6 +183,11 @@ dialog h3{font-size:18px;margin-bottom:16px}
       <div id="roughsView" class="muted">尚未加载</div>
     </div>
     <div class="card">
+      <h2>🧵 还没完的事（开放线索） <span class="badge" id="threadBadge">—</span></h2>
+      <p class="muted" style="margin-bottom:10px">每天刷新时从日总结里自动登记「聊了但还没下文」的事，随开窗注入（他会主动惦记追问）。进行中的超过 14 天没新进展会自动沉底（不再注入）；哪件事其实已经说过了，点右侧「了结」手动闭环。</p>
+      <div id="threadsView" class="muted">尚未加载</div>
+    </div>
+    <div class="card">
       <h2>🍂 季度概览（季） <span class="badge" id="quarterlyBadge">—</span></h2>
       <div id="quarterliesView" class="muted">尚未加载</div>
     </div>
@@ -405,6 +410,7 @@ async function loadMemory(){
     $('rulesView').textContent=d.core_rules||'(还没有约定契约，去工具页点「拉取核心准则订桶」)';
     renderMilestones(d.milestones);
     renderRoughs(d.roughs);
+    renderThreads(d.threads);
     renderMemoryList('dailiesView','dailyBadge',d.recent_daily,'date');
     renderMemoryList('monthliesView','monthlyBadge',d.monthlies,'scope');
     renderMemoryList('quarterliesView','quarterlyBadge',d.quarterlies,'scope');
@@ -430,6 +436,33 @@ async function runRefresh(){
     const d=await api('/admin/refresh?days='+days,{method:'POST'});
     $('refreshResult').innerHTML='<span class="tag green">完成</span> '+esc(JSON.stringify(d));
   }catch(e){$('refreshResult').innerHTML='<span class="tag red">失败</span> '+e.message}
+}
+// threads（还没完的事）
+function renderThreads(list){
+  const v=$('threadsView');if(!v)return;
+  if(!list||!list.length){v.innerHTML='<span class="muted">(还没有线索，刷新几次后会自动登记「聊了但还没下文」的事)</span>';$('threadBadge').textContent='0 条';return}
+  const openN=list.filter(t=>t.status==='open').length;
+  const dormN=list.filter(t=>t.status==='dormant').length;
+  $('threadBadge').textContent=openN+' 进行'+(dormN?(' / '+dormN+' 沉底'):'');
+  const badge=s=>s==='open'?'<span class="tag green">进行中</span>':(s==='dormant'?'<span class="tag" style="background:var(--bg2);color:var(--muted)">已沉底</span>':'<span class="tag" style="background:var(--bg2);color:var(--muted)">已了结</span>');
+  const sorted=[...list].sort((a,b)=>(a.status==='open'?0:1)-(b.status==='open'?0:1)||(b.opened||'').localeCompare(a.opened||''));
+  v.innerHTML=sorted.map(t=>{
+    const d=(t.opened||'').slice(0,10)||'?',s=esc(t.scope||''),c=esc((t.content||'').replace(/\n/g,' '));
+    const btn=t.status==='open'?`<button class="btn sm" style="padding:3px 10px;font-size:12px" onclick="closeThread('${s}')">了结</button>`:'';
+    return `<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 12px;margin-bottom:8px;background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;${t.status!=='open'?'opacity:.55':''}">
+      <span class="muted mono" style="white-space:nowrap;font-size:12px;align-self:center">${d}</span>
+      <span style="flex:1;font-size:13px;line-height:1.55">${c}</span>
+      ${badge(t.status)}
+      ${btn}
+    </div>`;
+  }).join('');
+}
+async function closeThread(scope){
+  if(!confirm('把这条线索标记为「已了结」？之后他不会再惦记追问这件事。'))return;
+  try{
+    const d=await api('/admin/thread_close?scope='+encodeURIComponent(scope),{method:'POST'});
+    if(d.ok)loadMemory();else alert('失败: '+(d.error||'未知错误'));
+  }catch(e){alert('失败: '+e.message)}
 }
 // milestones（我和宝宝的大事）
 function renderMilestones(list){

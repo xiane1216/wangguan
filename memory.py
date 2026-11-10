@@ -445,6 +445,33 @@ def _open_thread_items(rows: list) -> list[dict]:
     return out
 
 
+def _all_thread_items(rows: list) -> list[dict]:
+    """控制台用：全部线索带状态（open / dormant 超期未推进 / resolved 已了结）。"""
+    today = _now().date()
+    out = []
+    for r in rows:
+        it = _parse_thread_row(r)
+        status = "resolved"
+        if it:
+            try:
+                age = (today - date.fromisoformat(it["updated"][:10])).days
+            except ValueError:
+                age = 0
+            status = "dormant" if age > config.THREAD_MAX_AGE_DAYS else "open"
+        else:
+            try:
+                meta = json.loads(r.get("meta") or "{}")
+            except Exception:
+                meta = {}
+            it = {
+                "scope": str(r.get("scope") or ""),
+                "content": (r.get("content") or "").strip(),
+                "opened": str(meta.get("opened") or ""),
+            }
+        out.append({"scope": it["scope"], "content": it["content"], "opened": it["opened"], "status": status})
+    return out
+
+
 async def _load_open_threads() -> dict:
     """刷新流程用：加载开放线索并分配稳定编号 T1..Tn（按 scope 排序，编号一天内可复现）。"""
     rows = await store.get_memories("thread", "", 200, desc=False)

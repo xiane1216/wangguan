@@ -270,7 +270,7 @@ async def admin_memory(request: Request):
     core_rules = (rules_row or {}).get("content") or "" if rules_row else None
     milestones = await store.get_memories("milestone", "", 500, desc=False)
     thread_rows = await store.get_memories("thread", "", 200, desc=False)
-    threads = memory._open_thread_items(thread_rows)
+    threads = memory._all_thread_items(thread_rows)
     rough_rows = await store.get_all_roughs(limit=400)
     roughs = []
     for m in rough_rows:
@@ -287,7 +287,7 @@ async def admin_memory(request: Request):
         "core_rules_chars": len(core_rules or ""),
         "milestones": [{"scope": m.get("scope"), "content": m.get("content")} for m in milestones],
         "milestone_count": len(milestones),
-        "threads": [{"scope": t["scope"], "content": t["content"], "opened": t["opened"]} for t in threads],
+        "threads": [{"scope": t["scope"], "content": t["content"], "opened": t["opened"], "status": t["status"]} for t in threads],
         "roughs": roughs,
         "last_errors": last_errors,
         "longterm_chars": len((longterm or "").strip()),
@@ -418,6 +418,33 @@ async def admin_milestones_delete(request: Request):
         log.exception("删除大事失败 scope=%s", scope)
         return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
     return JSONResponse({"ok": bool(deleted), "scope": scope})
+
+
+async def admin_thread_close(request: Request):
+    """手动闭环一条开放线索（控制台用）：status 置为 resolved，内容保留。"""
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    scope = request.query_params.get("scope", "").strip()
+    if not scope:
+        return JSONResponse({"ok": False, "error": "缺少 scope 参数"}, status_code=400)
+    try:
+        row = await store.get_memory("thread", scope)
+    except Exception as exc:
+        log.exception("读取线索失败 scope=%s", scope)
+        return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+    if not row:
+        return JSONResponse({"ok": False, "error": "线索不存在"}, status_code=404)
+    try:
+        meta = json.loads(row.get("meta") or "{}")
+    except Exception:
+        meta = {}
+    meta.update({"status": "resolved", "closed": memory._now().strftime("%Y-%m-%d"), "closed_by": "admin"})
+    try:
+        await store.set_memory("thread", scope, row.get("content") or "", meta)
+    except Exception as exc:
+        log.exception("闭环线索失败 scope=%s", scope)
+        return JSONResponse({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+    return JSONResponse({"ok": True, "scope": scope, "status": "resolved"})
 
 
 async def admin_memory_edit(request: Request):
@@ -561,6 +588,7 @@ app = Starlette(routes=[
     Route("/admin/import_core_rules", admin_import_core_rules, methods=["GET", "POST"]),
     Route("/admin/milestones/scan", admin_milestones_scan, methods=["GET", "POST"]),
     Route("/admin/milestones/delete", admin_milestones_delete, methods=["GET", "POST"]),
+    Route("/admin/thread_close", admin_thread_close, methods=["GET", "POST"]),
     Route("/admin/memory_edit", admin_memory_edit, methods=["POST"]),
     Route("/admin/preview", admin_preview, methods=["GET"]),
     Route("/debug/xray", debug_xray, methods=["GET"]),
