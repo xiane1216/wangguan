@@ -184,23 +184,58 @@ async def _day_material(date_str: str, rows: list, clip: int) -> str:
             + "\n\n【当天较晚时段聊天原文】\n" + body)
 
 
-async def summarize_day(date_str: str, rows: list) -> str:
+# ---- 开放线索（"还没完的事"） ----
+
+_RE_THREAD_CLOSE = re.compile(r"^\[闭环\]\s*T(\d+)\s*$")
+_RE_THREAD_OPEN = re.compile(r"^\[线索\]\s*(.+)$")
+
+
+def split_daily_threads(text: str) -> tuple[str, dict]:
+    """把每日总结输出里的 [线索]/[闭环] 附加行抽出来，返回 (纯正文, 线索操作)。
+
+    这两类行是给记忆系统的信号，不能混进正文存库。正文里被模型误写在行中间的
+    不算（只认独立成行），宁漏勿错。"""
+    closed: list[str] = []
+    opened: list[str] = []
+    body: list[str] = []
+    for raw in (text or "").strip().splitlines():
+        line = raw.strip()
+        m = _RE_THREAD_CLOSE.match(line)
+        if m:
+            closed.append("T" + m.group(1))
+            continue
+        m = _RE_THREAD_OPEN.match(line)
+        if m:
+            desc = m.group(1).strip()
+            if desc:
+                opened.append(desc[:60])
+            continue
+        body.append(raw)
+    return "\n".join(body).strip(), {"opened": opened, "closed": closed}
+
+
+async def summarize_day(date_str: str, rows: list, open_threads: str = "") -> tuple[str, dict]:
     """详细每日概括（最近3天用）。覆盖全天，别漏掉最晚时段。
 
     治"总结不完"三道保险：
     1. 超量天拼"较早时段要点"，不再只看最后N条丢上午；
     2. 输出顶到 max_tokens（strict_full）会被拦下，附言重试一次"压缩更狠但覆盖全天"；
     3. 模型写超字数上限时，单独做一轮"只减细节不减时段"的压缩，硬截断只做最后兜底。
+
+    open_threads：当前未闭环线索清单（编号文本）。模型顺带输出 [线索]/[闭环] 附加行，
+    一次调用两用，不多花调用。返回 (正文, 线索操作)，正文已剥离附加行，
+    线索操作 = {"opened": [描述...], "closed": ["T2"...]} 由 memory 层写 thread 表。
     """
     text = await _day_material(date_str, rows, clip=800)
     if not text.strip():
-        return ""
+        return "", {"opened": [], "closed": []}
     base_prompt = prompts.DAILY_SUMMARY.format(
         user_label=config.USER_LABEL,
         ai_label=config.AI_LABEL,
         date=date_str,
         max_chars=config.DAILY_MAX_CHARS,
         transcript=text,
+        open_threads=(open_threads or "").strip() or "无",
     )
     summary = ""
     try:
@@ -220,14 +255,16 @@ async def summarize_day(date_str: str, rows: list) -> str:
             config.SUMMARY_TEMPERATURE,
             strict_full=True,
         )
-    if len(summary) > config.DAILY_MAX_CHARS:
+    # 剥离 [线索]/[闭环] 附加行 + 首行「记忆归档开始」标记，后续压缩只作用正文
+    body, thread_ops = split_daily_threads(_clean(summary))
+    if len(body) > config.DAILY_MAX_CHARS:
         # 超长但完整：做一轮"减细节不减时段"的压缩，避免硬截断砍掉晚上
         try:
             compact = await _chat(
                 [{"role": "user", "content": prompts.DAILY_COMPRESS.format(
                     date=date_str,
                     max_chars=config.DAILY_MAX_CHARS,
-                    summary=summary,
+                    summary=body,
                     user_label=config.USER_LABEL,
                 )}],
                 config.DAILY_MAX_TOKENS,
@@ -235,12 +272,53 @@ async def summarize_day(date_str: str, rows: list) -> str:
                 strict_full=True,
             )
             if compact.strip():
-                summary = compact
+                body = split_daily_threads(compact)[0]
         except Exception:
             log.exception("超长总结压缩失败：%s（退化为硬截断）", date_str)
-    if len(summary) > config.DAILY_MAX_CHARS:
-        log.warning("每日概括最终超长，硬截断兜底：%s（%d 字）", date_str, len(summary))
-    return _hard_cap(summary, config.DAILY_MAX_CHARS)
+    if len(body) > config.DAILY_MAX_CHARS:
+        log.warning("每日概括最终超长，硬截断兜底：%s（%d 字）", date_str, len(body))
+    return _hard_cap(body, config.DAILY_MAX_CHARS), thread_ops
+
+
+_RE_THREAD_REVIEW = re.compile(r"^\[(了结|悬|更新)\]\s*(.*)$")
+
+
+async def review_threads(threads_text: str, recent_text: str) -> list[dict]:
+    """每周反刍：拿最近一周的聊天概括对照所有未闭环线索，批量补漏判定。
+
+    每日总结里的实时闭环会有漏判，这里是第二道网。返回
+    [{"id": "T3", "action": "resolved"|"keep"|"update", "desc": str}]，
+    解析不到的行直接忽略，宁漏勿错。"""
+    prompt = prompts.THREAD_REVIEW.format(
+        user_label=config.USER_LABEL,
+        ai_label=config.AI_LABEL,
+        threads=threads_text,
+        recent=recent_text,
+    )
+    raw = await _chat(
+        [{"role": "user", "content": prompt}],
+        2000,
+        config.SUMMARY_TEMPERATURE,
+    )
+    ops: list[dict] = []
+    for line in (raw or "").strip().splitlines():
+        m = _RE_THREAD_REVIEW.match(line.strip())
+        if not m:
+            continue
+        act, rest = m.group(1), m.group(2).strip()
+        tid_m = re.match(r"T(\d+)", rest)
+        if not tid_m:
+            continue
+        tid = "T" + tid_m.group(1)
+        if act == "了结":
+            ops.append({"id": tid, "action": "resolved", "desc": ""})
+        elif act == "更新":
+            desc = rest.split("|", 1)[1].strip() if "|" in rest else ""
+            if desc:
+                ops.append({"id": tid, "action": "update", "desc": desc[:60]})
+        else:
+            ops.append({"id": tid, "action": "keep", "desc": ""})
+    return ops
 
 
 def parse_importance(text: str) -> tuple[str, int]:

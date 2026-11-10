@@ -90,6 +90,12 @@ MILESTONE_MAX_TOKENS = _int("MILESTONE_MAX_TOKENS", 8000)      # 大事识别输
 MILESTONE_MAX_CHARS = _int("MILESTONE_MAX_CHARS", 160)         # 单条大事字数上限
 MILESTONE_SOFT_LIMIT = _int("MILESTONE_SOFT_LIMIT", 50)        # 软上限：超过后在结果里警告（不阻止写入）
 
+# ---- 还没完的事（开放线索，kind=thread） ----
+# 每日总结顺带登记"悬而未决、值得过几天跟进"的事；注入时列给模型，让他会主动惦记、追问。
+THREAD_MAX_AGE_DAYS = _int("THREAD_MAX_AGE_DAYS", 14)          # 开放超过 N 天没有推进的自动休眠（不再注入，记录保留）
+THREAD_REVIEW_INTERVAL_DAYS = _int("THREAD_REVIEW_INTERVAL_DAYS", 7)  # 每周反刍：对照最近一周总结，批量补漏判定
+THREAD_MAX_INJECT = _int("THREAD_MAX_INJECT", 10)              # 注入块最多列几条（按更新时间旧的先挤掉）
+
 # ---- 宝宝画像（手动触发的用户画像记忆，kind=profile） ----
 PROFILE_MAX_CHARS = _int("PROFILE_MAX_CHARS", 1200)        # 画像全文上限（字）
 PROFILE_BATCH_MESSAGES = _int("PROFILE_BATCH_MESSAGES", 200)  # 提取层每批处理多少条消息

@@ -269,6 +269,8 @@ async def admin_memory(request: Request):
     rules_row = await store.get_memory("core_rules", "")
     core_rules = (rules_row or {}).get("content") or "" if rules_row else None
     milestones = await store.get_memories("milestone", "", 500, desc=False)
+    thread_rows = await store.get_memories("thread", "", 200, desc=False)
+    threads = memory._open_thread_items(thread_rows)
     rough_rows = await store.get_all_roughs(limit=400)
     roughs = []
     for m in rough_rows:
@@ -285,6 +287,7 @@ async def admin_memory(request: Request):
         "core_rules_chars": len(core_rules or ""),
         "milestones": [{"scope": m.get("scope"), "content": m.get("content")} for m in milestones],
         "milestone_count": len(milestones),
+        "threads": [{"scope": t["scope"], "content": t["content"], "opened": t["opened"]} for t in threads],
         "roughs": roughs,
         "last_errors": last_errors,
         "longterm_chars": len((longterm or "").strip()),
