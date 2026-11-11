@@ -34,6 +34,7 @@ ASSISTANT_ID = os.environ.get("ASSISTANT_ID", "").strip()  # 可选：只处理�
 
 # ---- Ombre Brain（只在长期记忆为空时，把浮现记忆"原样"搬进来，之后网关自理） ----
 OB_MCP_URL = os.environ.get("OB_MCP_URL", "").strip()
+OB_MCP_TOKEN = os.environ.get("OB_MCP_TOKEN", "").strip()  # OB 开 token 鉴权后填同一个值；为空则不带凭证（兼容旧部署）
 
 # ---- 鉴权 ----
 GATEWAY_KEY = os.environ.get("GATEWAY_KEY", "").strip()    # App 供应商里填的 API Key

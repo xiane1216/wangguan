@@ -35,11 +35,13 @@ def _parse(text: str) -> dict:
 
 
 async def call_tool(tool: str, args: dict) -> str:
-    """调用 OB 的一个 MCP 工具，返回 text 结果。OB 无需鉴权、无会话状态。"""
+    """调用 OB 的一个 MCP 工具，返回 text 结果。无会话状态；OB 开了 token 鉴权则自动携带。"""
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": tool, "arguments": args}}
     headers = {"Content-Type": "application/json",
                "Accept": "application/json, text/event-stream"}
+    if config.OB_MCP_TOKEN:
+        headers["Ombre-MCP-Token"] = config.OB_MCP_TOKEN
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=15, read=120, write=15, pool=15)) as client:
         r = await client.post(config.OB_MCP_URL, headers=headers, json=body)
     if r.status_code >= 400:
