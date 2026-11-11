@@ -121,6 +121,13 @@ def _xray_base(payload: dict, messages: list) -> dict:
 # ---- 普通接口 ----
 
 async def index(_: Request):
+    # 最小化公开信息：任何细节都可能帮扫描器确认服务价值与活跃时段
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+async def admin_status(request: Request):
+    if not _check_admin(request):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
     supabase_on = config.supabase_ready()
     longterm_chars = None
     dailies = []
@@ -573,6 +580,7 @@ async def console(_: Request):
 
 app = Starlette(routes=[
     Route("/", index, methods=["GET"]),
+    Route("/admin/status", admin_status, methods=["GET"]),
     Route("/console", console, methods=["GET"]),
     Route("/models", models_endpoint, methods=["GET"]),
     Route("/v1/models", models_endpoint, methods=["GET"]),

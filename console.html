@@ -367,7 +367,7 @@ function loadSettings(){
 // status
 async function loadStatus(){
   try{
-    const d=await fetch(base()+'/',{headers:{}});if(!d.ok)throw new Error('HTTP '+d.status);const j=await d.json();
+    const j=await api('/admin/status');
     $('dot').classList.add('on');$('sub').textContent='已连接 · '+(j.deepseek_configured?'DeepSeek ✓':'DeepSeek ✗');
     const items=[
       ['DeepSeek',j.deepseek_configured?'已配置':'未配置',j.deepseek_configured?'green':'red'],
